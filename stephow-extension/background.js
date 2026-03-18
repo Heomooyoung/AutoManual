@@ -160,6 +160,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (step) {
       step.markers = message.markers;
       step.screenshotWithMarker = message.screenshotWithMarker;
+      if (message.screenshot) step.screenshot = message.screenshot;
       step.description = message.description;
       persistSteps();
       sendResponse({ success: true });
@@ -245,12 +246,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           );
 
           lastStep.screenshotWithMarker = markedDataUrl;
-          lastStep.screenshot = dataUrl; // 최신 스크린샷으로 갱신
-          // 설명에 새 동작 추가
-          const newDesc = clickData.element.autoDescription || '';
-          if (newDesc) {
-            lastStep.description += `\n${newMarkerNumber}. ${newDesc}`;
-          }
+          lastStep.screenshot = dataUrl;
+          // 설명을 마커별로 재생성
+          lastStep.description = lastStep.markers
+            .map((m, i) => `${i + 1}. ${m.description || ''}`)
+            .filter(d => d.length > 3)
+            .join('\n');
 
           // 사이드 패널에 업데이트 알림
           chrome.runtime.sendMessage({
@@ -383,10 +384,14 @@ async function addMultipleMarkers(dataUrl, markers, viewport) {
       ctx.stroke();
       ctx.restore();
 
-      // 번호 배지
+      // 번호 배지 (화면 밖으로 나가지 않게 클램핑)
       const badgeSize = 26 * scaleX;
-      const badgeX = rx - badgeSize * 0.3;
-      const badgeY = ry - badgeSize * 0.3;
+      let badgeX = rx - badgeSize * 0.3;
+      let badgeY = ry - badgeSize * 0.3;
+      if (badgeX < 2) badgeX = 2;
+      if (badgeY < 2) badgeY = 2;
+      if (badgeX + badgeSize > canvas.width - 2) badgeX = canvas.width - badgeSize - 2;
+      if (badgeY + badgeSize > canvas.height - 2) badgeY = canvas.height - badgeSize - 2;
 
       ctx.save();
       ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
@@ -496,10 +501,14 @@ async function addClickMarker(dataUrl, clickX, clickY, stepNumber, viewport, ele
     ctx.stroke();
     ctx.restore();
 
-    // --- 2) 번호 배지: 라운드 사각형 좌측 상단에 표시 ---
+    // --- 2) 번호 배지: 라운드 사각형 좌측 상단 (화면 밖으로 안 나가게) ---
     const badgeSize = 26 * scaleX;
-    const badgeX = rx - badgeSize * 0.3;
-    const badgeY = ry - badgeSize * 0.3;
+    let badgeX = rx - badgeSize * 0.3;
+    let badgeY = ry - badgeSize * 0.3;
+    if (badgeX < 2) badgeX = 2;
+    if (badgeY < 2) badgeY = 2;
+    if (badgeX + badgeSize > bitmap.width - 2) badgeX = bitmap.width - badgeSize - 2;
+    if (badgeY + badgeSize > bitmap.height - 2) badgeY = bitmap.height - badgeSize - 2;
 
     // 배지 원
     ctx.save();

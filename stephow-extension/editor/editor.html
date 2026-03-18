@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>StepHow - 편집기</title>
+  <title>AutoManual - 편집기</title>
   <link rel="stylesheet" href="editor.css">
 </head>
 <body>
@@ -14,14 +14,36 @@
         <button class="tool-btn active" data-tool="rect" title="사각형">▭ 사각형</button>
         <button class="tool-btn" data-tool="arrow" title="화살표">→ 화살표</button>
         <button class="tool-btn" data-tool="circle" title="원형">● 원형</button>
+        <button class="tool-btn" data-tool="text" title="텍스트">T 텍스트</button>
+        <button class="tool-btn" data-tool="blur" title="블러">◫ 블러</button>
+        <button class="tool-btn" data-tool="crop" title="크롭">⬒ 크롭</button>
         <span class="toolbar-sep"></span>
         <button class="tool-btn tool-undo" id="undoBtn" title="실행취소">↩ 취소</button>
         <button class="tool-btn tool-clear" id="clearBtn" title="전체삭제">🗑 초기화</button>
       </div>
+      <!-- 텍스트 도구 옵션 바 -->
+      <div class="tool-options" id="textOptions" style="display:none;">
+        <label>텍스트: <input type="text" id="textInput" placeholder="입력할 텍스트..." value=""></label>
+        <label>크기: <select id="textSize">
+          <option value="16">16px</option>
+          <option value="20" selected>20px</option>
+          <option value="28">28px</option>
+          <option value="36">36px</option>
+        </select></label>
+        <label>색상: <input type="color" id="textColor" value="#e63232"></label>
+      </div>
+      <!-- 블러 강도 옵션 -->
+      <div class="tool-options" id="blurOptions" style="display:none;">
+        <label>블러 강도: <select id="blurStrength">
+          <option value="8">약하게</option>
+          <option value="16" selected>보통</option>
+          <option value="30">강하게</option>
+        </select></label>
+      </div>
       <div class="canvas-container" id="canvasContainer">
         <canvas id="editorCanvas"></canvas>
       </div>
-      <div class="canvas-hint">클릭하고 드래그하여 도형을 그리세요. 번호는 자동으로 매겨집니다.</div>
+      <div class="canvas-hint" id="canvasHint">클릭하고 드래그하여 도형을 그리세요. 번호는 자동으로 매겨집니다.</div>
     </div>
 
     <!-- 우측: 설명 패널 -->

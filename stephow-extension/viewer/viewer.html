@@ -9,16 +9,21 @@
 <body>
   <div class="viewer-container">
     <header class="viewer-header">
-      <h1 id="manualTitle">매뉴얼</h1>
-      <div class="viewer-meta" id="manualMeta"></div>
+      <div class="viewer-header-left">
+        <h1 id="manualTitle">매뉴얼</h1>
+        <div class="viewer-meta" id="manualMeta"></div>
+      </div>
+      <div class="viewer-header-right">
+        <span class="edit-badge">편집 가능</span>
+        <button class="viewer-btn btn-save" id="saveAllBtn">💾 전체 저장</button>
+        <button class="viewer-btn btn-export" id="exportHtmlBtn">📄 HTML 내보내기</button>
+      </div>
     </header>
 
-    <div id="stepContainer" class="step-container">
-      <!-- 단계들이 여기에 렌더링됨 -->
-    </div>
+    <div id="stepContainer" class="step-container"></div>
 
     <footer class="viewer-footer">
-      StepHow Clone으로 생성됨
+      AutoManual로 생성됨
     </footer>
   </div>
 

@@ -84,22 +84,8 @@ chrome.runtime.onMessage.addListener((message) => {
     updateStepCount();
   }
   if (message.type === 'UPDATE_STEP') {
-    // 화면당 1장 모드: 기존 카드를 업데이트
-    const cards = stepList.querySelectorAll('.step-card');
-    const card = cards[message.index];
-    if (card) {
-      // 스크린샷 갱신
-      const img = card.querySelector('.step-screenshot');
-      if (img) img.src = message.step.screenshotWithMarker;
-      // 설명 갱신
-      const textarea = card.querySelector('textarea');
-      if (textarea) textarea.value = message.step.description || '';
-      // 요소 정보 갱신
-      const info = card.querySelector('.step-element-info');
-      if (info && message.step.markers) {
-        info.textContent = `📍 ${message.step.markers.length}개 동작이 이 화면에 기록됨`;
-      }
-    }
+    // 화면당 1장 모드: 전체 목록을 새로고침하여 마커 목록도 갱신
+    refreshStepListFromBg();
   }
   // 편집기에서 저장 완료 → 사이드 패널 새로고침
   if (message.type === 'EDITOR_SAVED') {
@@ -204,20 +190,31 @@ function addStepCard(step) {
   const markersDiv = document.createElement('div');
   markersDiv.className = 'step-markers-list';
 
-  const markers = step.markers || [];
-  if (markers.length === 0) {
-    // 마커가 없으면 단일 설명란
-    const row = document.createElement('div');
-    row.className = 'marker-row';
-    const ta = document.createElement('textarea');
-    ta.placeholder = '설명을 입력하세요...';
-    ta.value = step.description || '';
-    ta.addEventListener('change', (e) => {
-      updateDescription(stepIndex, e.target.value);
-    });
-    row.appendChild(ta);
-    markersDiv.appendChild(row);
-  } else {
+  // 마커가 없거나 배열이 아니면 step 정보로 기본 마커 생성
+  let markers = Array.isArray(step.markers) && step.markers.length > 0
+    ? step.markers
+    : [{
+        number: 1,
+        element: step.element || { tag: '', text: '' },
+        description: step.description || step.element?.autoDescription || ''
+      }];
+
+  // 각 마커의 description이 비어있으면 step.description에서 추출 시도
+  markers.forEach((m, i) => {
+    if (!m.description && step.description) {
+      // "1. 설명\n2. 설명" 형식에서 해당 번호의 설명 추출
+      const lines = step.description.split('\n');
+      const prefix = `${i + 1}. `;
+      const matched = lines.find(l => l.startsWith(prefix));
+      if (matched) {
+        m.description = matched.substring(prefix.length);
+      } else if (markers.length === 1) {
+        m.description = step.description;
+      }
+    }
+  });
+
+  {
     markers.forEach((marker, mi) => {
       const row = document.createElement('div');
       row.className = 'marker-row';
@@ -406,6 +403,8 @@ function exportAs(format) {
       exportToHTML(title, steps);
     } else if (format === 'pptx') {
       exportToPPTX(title, steps);
+    } else if (format === 'gif') {
+      exportToGIF(title, steps);
     } else {
       alert(`${format.toUpperCase()} 내보내기는 다음 버전에서 지원됩니다.`);
     }
@@ -716,6 +715,111 @@ function exportToPPTX(title, steps) {
     console.error('[StepHow] PPT 내보내기 실패:', err);
     alert('PPT 내보내기에 실패했습니다: ' + err.message);
   });
+}
+
+// ─── GIF 내보내기 ───
+function exportToGIF(title, steps) {
+  if (typeof GIF === 'undefined') {
+    alert('GIF 라이브러리를 불러오지 못했습니다.');
+    return;
+  }
+
+  const WIDTH = 800;
+  const statusEl = document.createElement('div');
+  statusEl.style.cssText = 'position:fixed;top:0;left:0;right:0;padding:12px;background:#1b2a4a;color:#fff;text-align:center;font-size:14px;z-index:99999;font-family:inherit;';
+  statusEl.textContent = 'GIF 생성 중... (0%)';
+  document.body.appendChild(statusEl);
+
+  const workerUrl = chrome.runtime.getURL('vendor/gif.worker.js');
+  const gif = new GIF({
+    workers: 2,
+    quality: 10,
+    width: WIDTH,
+    height: Math.round(WIDTH * 0.6),
+    workerScript: workerUrl
+  });
+
+  const gifH = Math.round(WIDTH * 0.6);
+  let loaded = 0;
+
+  // 각 단계의 이미지를 캔버스로 렌더링 후 프레임 추가
+  const addFrames = async () => {
+    for (const step of steps) {
+      const frameCanvas = document.createElement('canvas');
+      frameCanvas.width = WIDTH;
+      frameCanvas.height = gifH;
+      const fCtx = frameCanvas.getContext('2d');
+
+      // 배경
+      fCtx.fillStyle = '#e8ecf4';
+      fCtx.fillRect(0, 0, WIDTH, gifH);
+
+      // 상단 바
+      fCtx.fillStyle = '#1b2a4a';
+      fCtx.fillRect(0, 0, WIDTH, 36);
+      fCtx.fillStyle = '#4a90d9';
+      fCtx.font = 'bold 14px sans-serif';
+      fCtx.textBaseline = 'middle';
+      fCtx.fillText(`Step ${step.stepNumber}`, 12, 18);
+      fCtx.fillStyle = '#6b7b9e';
+      fCtx.font = '11px sans-serif';
+      fCtx.fillText(step.pageTitle || '', 100, 18);
+
+      // 스크린샷
+      await new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          // 비율 유지하여 중앙 배치
+          const maxW = WIDTH - 20;
+          const maxH = gifH - 80;
+          const ratio = Math.min(maxW / img.width, maxH / img.height);
+          const drawW = img.width * ratio;
+          const drawH = img.height * ratio;
+          const drawX = (WIDTH - drawW) / 2;
+          const drawY = 42 + (maxH - drawH) / 2;
+
+          fCtx.drawImage(img, drawX, drawY, drawW, drawH);
+
+          // 하단 설명
+          const desc = step.description || '';
+          const shortDesc = desc.length > 60 ? desc.substring(0, 60) + '...' : desc;
+          fCtx.fillStyle = 'rgba(27,42,74,0.85)';
+          fCtx.fillRect(0, gifH - 32, WIDTH, 32);
+          fCtx.fillStyle = '#ffffff';
+          fCtx.font = '12px sans-serif';
+          fCtx.textBaseline = 'middle';
+          fCtx.fillText(shortDesc, 12, gifH - 16);
+
+          resolve();
+        };
+        img.src = step.screenshotWithMarker;
+      });
+
+      gif.addFrame(frameCanvas, { delay: 2500, copy: true });
+      loaded++;
+      statusEl.textContent = `GIF 생성 중... 프레임 ${loaded}/${steps.length}`;
+    }
+
+    gif.on('progress', (p) => {
+      statusEl.textContent = `GIF 인코딩 중... ${Math.round(p * 100)}%`;
+    });
+
+    gif.on('finished', (blob) => {
+      statusEl.remove();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${title}.gif`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+
+    gif.render();
+  };
+
+  addFrames();
 }
 
 function escapeHtml(text) {

@@ -44,6 +44,60 @@ body {
   margin: 0 6px;
 }
 
+.tool-options {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 14px;
+  background: #2a2a48;
+  border-bottom: 1px solid #3a3a5c;
+  font-size: 12px;
+  color: #c0c0d0;
+}
+
+.tool-options label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-options input[type="text"] {
+  padding: 4px 8px;
+  border: 1px solid #3a3a5c;
+  border-radius: 4px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-size: 12px;
+  font-family: inherit;
+  width: 200px;
+  outline: none;
+}
+
+.tool-options input[type="text"]:focus {
+  border-color: #4a90d9;
+}
+
+.tool-options select {
+  padding: 4px 8px;
+  border: 1px solid #3a3a5c;
+  border-radius: 4px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+
+.tool-options input[type="color"] {
+  width: 28px;
+  height: 24px;
+  border: 1px solid #3a3a5c;
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+}
+
 .tool-btn {
   padding: 6px 14px;
   border: 1px solid #3a3a5c;

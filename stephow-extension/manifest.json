@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "StepHow Clone - 매뉴얼 자동 생성",
+  "name": "AutoManual - 매뉴얼 자동 생성",
   "version": "0.1.0",
   "description": "클릭만으로 업무 매뉴얼을 자동 생성하는 도구",
 
@@ -48,5 +48,12 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": ["vendor/gif.worker.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }
