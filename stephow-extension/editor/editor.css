@@ -253,6 +253,52 @@ body {
   color: #e65050;
 }
 
+.desc-select-btn {
+  background: none;
+  border: 1px solid #4a4a6a;
+  border-radius: 4px;
+  color: #888;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.desc-select-btn:hover {
+  background: #2a3a5a;
+  border-color: #4a90d9;
+  color: #4a90d9;
+}
+
+.desc-item-selected {
+  border-color: #4a90d9 !important;
+  background: #2a2a50 !important;
+}
+
+.desc-panel-btns {
+  display: flex;
+  gap: 8px;
+}
+
+.close-btn {
+  padding: 6px 12px;
+  border: 1px solid #4a4a6a;
+  border-radius: 6px;
+  background: transparent;
+  color: #c0c0d0;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.close-btn:hover {
+  background: #5a2a2a;
+  border-color: #e65050;
+  color: #e65050;
+}
+
 .desc-item textarea {
   width: 100%;
   border: none;
@@ -281,3 +327,62 @@ body {
 .desc-list::-webkit-scrollbar-thumb { background: #4a4a6a; border-radius: 3px; }
 .canvas-container::-webkit-scrollbar { width: 5px; height: 5px; }
 .canvas-container::-webkit-scrollbar-thumb { background: #4a4a6a; border-radius: 3px; }
+
+/* ── 크롭 액션 바 ── */
+.crop-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: #252542;
+  border-top: 1px solid #3a3a5c;
+}
+
+.crop-action-btn {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.crop-apply {
+  background: #4a90d9;
+  color: #ffffff;
+}
+
+.crop-apply:hover {
+  background: #3a7bc8;
+}
+
+.crop-reset {
+  background: #5a4a2a;
+  color: #f0ad4e;
+}
+
+.crop-reset:hover {
+  background: #6a5a3a;
+}
+
+.crop-cancel {
+  background: #4a4a6a;
+  color: #c0c0d0;
+}
+
+.crop-cancel:hover {
+  background: #5a5a7a;
+}
+
+/* ── 인라인 텍스트 입력 ── */
+.inline-text-input {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  transition: border-color 0.2s;
+}
+
+.inline-text-input:focus {
+  box-shadow: 0 4px 16px rgba(74,144,217,0.4);
+}

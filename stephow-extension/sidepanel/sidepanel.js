@@ -488,7 +488,7 @@ function exportToHTML(title, steps) {
     </div>
   </div>`;
   }).join('\n')}
-  <div class="footer">StepHow Clone으로 생성됨</div>
+  <div class="footer">DX-AutoManual으로 생성됨</div>
 </body>
 </html>`;
 
@@ -521,7 +521,7 @@ const FONT = 'Malgun Gothic'; // 맑은 고딕 (깔끔, 한글 지원)
 function exportToPPTX(title, steps) {
   const pptx = new PptxGenJS();
   pptx.layout = 'LAYOUT_16x9';
-  pptx.author = 'StepHow Clone';
+  pptx.author = 'DX-AutoManual';
 
   // === 표지 슬라이드 ===
   const titleSlide = pptx.addSlide();
@@ -554,7 +554,7 @@ function exportToPPTX(title, steps) {
     color: NAVY.sub, align: 'center'
   });
 
-  titleSlide.addText('StepHow Clone', {
+  titleSlide.addText('DX-AutoManual', {
     x: 1, y: 4.8, w: 8, h: 0.4,
     fontSize: 10, fontFace: FONT,
     color: '4A5568', align: 'center'
@@ -710,9 +710,9 @@ function exportToPPTX(title, steps) {
 
   // 파일 다운로드
   pptx.writeFile({ fileName: `${title}.pptx` }).then(() => {
-    console.log('[StepHow] PPT 내보내기 완료');
+    console.log('[DX-AutoManual] PPT 내보내기 완료');
   }).catch((err) => {
-    console.error('[StepHow] PPT 내보내기 실패:', err);
+    console.error('[DX-AutoManual] PPT 내보내기 실패:', err);
     alert('PPT 내보내기에 실패했습니다: ' + err.message);
   });
 }

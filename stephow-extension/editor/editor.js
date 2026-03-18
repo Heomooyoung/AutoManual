@@ -1,12 +1,14 @@
 // ========================================
-// editor.js — 마커 편집기 (v2)
-// 도구: 사각형, 화살표, 원형, 텍스트, 블러, 크롭
+// editor.js — 마커 편집기 (v5)
+// 도구: 사각형, 화살표, 원형, 텍스트(인라인), 블러, 크롭(상하좌우), 선택/삭제
+// Undo: 블러/크롭 포함 전체 되돌리기
 // ========================================
 
 const canvas = document.getElementById('editorCanvas');
 const ctx = canvas.getContext('2d');
 const descList = document.getElementById('descList');
 const hintEl = document.getElementById('canvasHint');
+const canvasContainer = document.getElementById('canvasContainer');
 
 const params = new URLSearchParams(location.search);
 const stepIndex = parseInt(params.get('step'), 10);
@@ -15,8 +17,8 @@ let bgImage = null;
 let bgDataUrl = '';
 let viewport = null;
 let imgScale = 1;
-let annotations = [];    // 번호가 매겨지는 도형 (rect, arrow, circle, text)
-let effects = [];        // 번호 없는 효과 (blur)
+let annotations = [];
+let effects = [];
 let currentTool = 'rect';
 let isDrawing = false;
 let startX = 0, startY = 0;
@@ -24,13 +26,58 @@ let startX = 0, startY = 0;
 const DRAW_COLOR = 'rgba(230, 50, 50, 0.85)';
 const DRAW_FILL = 'rgba(230, 50, 50, 0.08)';
 
+// ── Undo 히스토리 (이미지 상태 스냅샷) ──
+let undoStack = []; // { bgDataUrl, canvasW, canvasH, annotations, effects }
+const MAX_UNDO = 30;
+
+function saveUndoState() {
+  undoStack.push({
+    bgDataUrl: bgDataUrl,
+    canvasW: canvas.width,
+    canvasH: canvas.height,
+    annotations: JSON.parse(JSON.stringify(annotations)),
+    effects: JSON.parse(JSON.stringify(effects))
+  });
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+}
+
+function performUndo() {
+  if (undoStack.length === 0) return;
+  const state = undoStack.pop();
+
+  bgDataUrl = state.bgDataUrl;
+  annotations = state.annotations;
+  effects = state.effects;
+  canvas.width = state.canvasW;
+  canvas.height = state.canvasH;
+
+  const img = new Image();
+  img.onload = () => {
+    bgImage = img;
+    render();
+    renderDescList();
+  };
+  img.src = bgDataUrl;
+}
+
+// ── 크롭 상태 ──
+let cropMode = false;
+let cropTop = 0, cropBottom = 0, cropLeft = 0, cropRight = 0;
+let cropDragging = null;
+const CROP_HANDLE_HIT = 20;
+
+// ── 선택 도구 상태 ──
+let selectedIndex = -1;
+
 const toolHints = {
   rect: '드래그하여 사각형을 그리세요',
   arrow: '드래그하여 화살표를 그리세요',
   circle: '드래그하여 원을 그리세요',
-  text: '클릭하여 텍스트를 배치하세요 (위 입력란에 텍스트 입력)',
+  text: '클릭하면 해당 위치에서 직접 텍스트를 입력할 수 있습니다',
+  numbering: '클릭하면 순서대로 번호가 매겨진 원형 마커가 배치됩니다',
   blur: '드래그하여 블러 처리할 영역을 선택하세요',
-  crop: '드래그하여 잘라낼 영역을 선택하세요 (선택 후 즉시 적용)'
+  crop: '상/하/좌/우 경계선을 드래그하여 영역 조절 → "크롭 적용" 클릭',
+  select: '마커를 클릭하여 선택 → Delete 또는 우측 삭제 버튼으로 삭제'
 };
 
 // ── 초기 로드 ──
@@ -70,6 +117,8 @@ chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
         }
       });
     }
+    // 초기 상태 저장
+    saveUndoState();
     render();
     renderDescList();
   };
@@ -79,67 +128,476 @@ chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
 // ── 도구 선택 ──
 document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
   btn.addEventListener('click', () => {
+    if (activeTextInput) commitInlineText();
+    if (cropMode && btn.dataset.tool !== 'crop') exitCropMode();
+
     document.querySelectorAll('.tool-btn[data-tool]').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     currentTool = btn.dataset.tool;
     hintEl.textContent = toolHints[currentTool] || '';
 
-    // 옵션 바 토글
+    // 선택 해제
+    if (currentTool !== 'select') {
+      selectedIndex = -1;
+      render();
+    }
+
     document.getElementById('textOptions').style.display = currentTool === 'text' ? 'flex' : 'none';
     document.getElementById('blurOptions').style.display = currentTool === 'blur' ? 'flex' : 'none';
+
+    if (currentTool === 'crop' && !cropMode) enterCropMode();
+
+    // 커서
+    canvas.style.cursor = (currentTool === 'select') ? 'pointer' : 'crosshair';
   });
 });
 
+// ── Undo 버튼 ──
 document.getElementById('undoBtn').addEventListener('click', () => {
-  // 마지막에 추가된 것이 effect인지 annotation인지 확인
-  if (effects.length > 0 && annotations.length > 0) {
-    const lastEffect = effects[effects.length - 1];
-    const lastAnn = annotations[annotations.length - 1];
-    if ((lastEffect._addedAt || 0) > (lastAnn._addedAt || 0)) {
-      effects.pop();
-    } else {
-      annotations.pop();
-      renumber();
-    }
-  } else if (effects.length > 0) {
-    effects.pop();
-  } else if (annotations.length > 0) {
-    annotations.pop();
-    renumber();
-  }
-  render();
-  renderDescList();
+  if (cropMode) return;
+  if (activeTextInput) { cancelInlineText(); return; }
+  selectedIndex = -1;
+  performUndo();
 });
 
+// ── 키보드 단축키 ──
+document.addEventListener('keydown', (e) => {
+  if (activeTextInput) return;
+
+  // Ctrl+Z = Undo
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+    e.preventDefault();
+    if (!cropMode) performUndo();
+    return;
+  }
+
+  // Delete/Backspace = 선택된 항목 삭제
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIndex >= 0 && currentTool === 'select') {
+    e.preventDefault();
+    saveUndoState();
+    annotations.splice(selectedIndex, 1);
+    renumber();
+    selectedIndex = -1;
+    render();
+    renderDescList();
+    return;
+  }
+});
+
+// ── 초기화 버튼 ──
 document.getElementById('clearBtn').addEventListener('click', () => {
+  if (cropMode) return;
+  if (activeTextInput) cancelInlineText();
+  if (annotations.length === 0 && effects.length === 0) return;
   if (!confirm('모든 마커와 효과를 삭제하시겠습니까?')) return;
+  saveUndoState();
   annotations = [];
   effects = [];
+  selectedIndex = -1;
   render();
   renderDescList();
 });
 
-// ── 캔버스 이벤트 ──
-canvas.addEventListener('mousedown', (e) => {
-  if (currentTool === 'text') {
-    // 텍스트: 클릭 위치에 바로 배치
-    const r = canvas.getBoundingClientRect();
-    const sx = canvas.width / r.width;
-    const sy = canvas.height / r.height;
-    const px = (e.clientX - r.left) * sx;
-    const py = (e.clientY - r.top) * sy;
+// ── 닫기 버튼 (저장 없이 나가기) ──
+document.getElementById('closeBtn').addEventListener('click', () => {
+  if (confirm('저장하지 않고 닫으시겠습니까? 변경사항이 사라집니다.')) {
+    window.close();
+  }
+});
 
-    const textVal = document.getElementById('textInput').value || '텍스트';
-    const textSize = parseInt(document.getElementById('textSize').value, 10);
-    const textColor = document.getElementById('textColor').value;
+// ══════════════════════════════════════
+// 인라인 텍스트 입력
+// ══════════════════════════════════════
+let activeTextInput = null;
+let textInputReady = false;
 
+function createInlineTextInput(canvasX, canvasY) {
+  if (activeTextInput) commitInlineText();
+
+  const textSize = parseInt(document.getElementById('textSize').value, 10);
+  const textColor = document.getElementById('textColor').value;
+
+  const r = canvas.getBoundingClientRect();
+  const scaleX = r.width / canvas.width;
+  const scaleY = r.height / canvas.height;
+  const containerRect = canvasContainer.getBoundingClientRect();
+
+  const screenX = canvasX * scaleX + r.left - containerRect.left + canvasContainer.scrollLeft;
+  const screenY = canvasY * scaleY + r.top - containerRect.top + canvasContainer.scrollTop;
+  const displayFontSize = Math.max(14, textSize * scaleY);
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'inline-text-input';
+  input.style.cssText = `
+    position: absolute;
+    left: ${screenX}px;
+    top: ${screenY}px;
+    font-size: ${displayFontSize}px;
+    font-weight: bold;
+    font-family: 'Malgun Gothic', sans-serif;
+    color: ${textColor};
+    background: rgba(255,255,255,0.95);
+    border: 2px solid ${textColor};
+    border-radius: 4px;
+    padding: 4px 8px;
+    outline: none;
+    min-width: 120px;
+    z-index: 1000;
+  `;
+  input.placeholder = '텍스트 입력 후 Enter';
+
+  input._canvasX = canvasX;
+  input._canvasY = canvasY;
+  input._fontSize = textSize;
+  input._color = textColor;
+
+  canvasContainer.style.position = 'relative';
+  canvasContainer.appendChild(input);
+  activeTextInput = input;
+  textInputReady = false;
+
+  requestAnimationFrame(() => {
+    input.focus();
+    setTimeout(() => { textInputReady = true; }, 300);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation(); // 글로벌 키보드 핸들러 차단
+    if (e.key === 'Enter') { e.preventDefault(); commitInlineText(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancelInlineText(); }
+  });
+
+  input.addEventListener('blur', () => {
+    if (!textInputReady) return;
+    setTimeout(() => {
+      if (activeTextInput === input) commitInlineText();
+    }, 200);
+  });
+
+  input.addEventListener('mousedown', (e) => e.stopPropagation());
+  input.addEventListener('click', (e) => e.stopPropagation());
+}
+
+function commitInlineText() {
+  if (!activeTextInput) return;
+  const input = activeTextInput;
+  activeTextInput = null;
+  textInputReady = false;
+  const text = input.value.trim();
+
+  if (text) {
+    saveUndoState();
     annotations.push({
-      type: 'text',
-      x: px, y: py, w: 0, h: 0,
-      text: textVal, fontSize: textSize, color: textColor,
-      number: annotations.length + 1,
-      description: textVal,
-      _addedAt: Date.now()
+      type: 'text', x: input._canvasX, y: input._canvasY, w: 0, h: 0,
+      text, fontSize: input._fontSize, color: input._color,
+      number: annotations.length + 1, description: text, _addedAt: Date.now()
+    });
+    render();
+    renderDescList();
+  }
+  input.remove();
+}
+
+function cancelInlineText() {
+  if (!activeTextInput) return;
+  const input = activeTextInput;
+  activeTextInput = null;
+  textInputReady = false;
+  input.remove();
+}
+
+// ══════════════════════════════════════
+// 선택 도구
+// ══════════════════════════════════════
+function hitTest(px, py) {
+  // 뒤에서부터 검사 (위에 그려진 것 우선)
+  for (let i = annotations.length - 1; i >= 0; i--) {
+    const ann = annotations[i];
+    if (ann.type === 'numbering') {
+      // 넘버링: 원형 반경 내
+      const dist = Math.hypot(px - ann.x, py - ann.y);
+      if (dist < 22) return i;
+    } else if (ann.type === 'text') {
+      // 텍스트 히트 영역
+      ctx.font = `bold ${ann.fontSize || 20}px 'Malgun Gothic', sans-serif`;
+      const tw = ctx.measureText(ann.text || '').width;
+      const th = (ann.fontSize || 20) + 6;
+      if (px >= ann.x - 4 && px <= ann.x + tw + 4 && py >= ann.y - 2 && py <= ann.y + th) return i;
+    } else if (ann.type === 'arrow') {
+      // 화살표: 시작~끝점 근처
+      const ex = ann.x + ann.w, ey = ann.y + ann.h;
+      const dist = pointToSegmentDist(px, py, ann.x, ann.y, ex, ey);
+      if (dist < 15) return i;
+    } else {
+      // rect, circle: 바운딩 박스
+      const rx = Math.min(ann.x, ann.x + ann.w);
+      const ry = Math.min(ann.y, ann.y + ann.h);
+      const rw = Math.abs(ann.w);
+      const rh = Math.abs(ann.h);
+      if (px >= rx - 10 && px <= rx + rw + 10 && py >= ry - 10 && py <= ry + rh + 10) return i;
+    }
+  }
+  return -1;
+}
+
+function pointToSegmentDist(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+function drawSelection(ann) {
+  if (!ann) return;
+  ctx.save();
+  ctx.setLineDash([6, 3]);
+  ctx.strokeStyle = '#4a90d9';
+  ctx.lineWidth = 2;
+
+  if (ann.type === 'numbering') {
+    ctx.beginPath();
+    ctx.arc(ann.x, ann.y, 24, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (ann.type === 'text') {
+    ctx.font = `bold ${ann.fontSize || 20}px 'Malgun Gothic', sans-serif`;
+    const tw = ctx.measureText(ann.text || '').width;
+    const th = (ann.fontSize || 20) + 6;
+    ctx.strokeRect(ann.x - 8, ann.y - 6, tw + 16, th + 8);
+  } else if (ann.type === 'arrow') {
+    const minX = Math.min(ann.x, ann.x + ann.w) - 10;
+    const minY = Math.min(ann.y, ann.y + ann.h) - 10;
+    const maxX = Math.max(ann.x, ann.x + ann.w) + 10;
+    const maxY = Math.max(ann.y, ann.y + ann.h) + 10;
+    ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+  } else {
+    const rx = Math.min(ann.x, ann.x + ann.w) - 6;
+    const ry = Math.min(ann.y, ann.y + ann.h) - 6;
+    ctx.strokeRect(rx, ry, Math.abs(ann.w) + 12, Math.abs(ann.h) + 12);
+  }
+
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+// ══════════════════════════════════════
+// 크롭 모드 (상하좌우)
+// ══════════════════════════════════════
+function enterCropMode() {
+  cropMode = true;
+  cropTop = 0;
+  cropBottom = canvas.height;
+  cropLeft = 0;
+  cropRight = canvas.width;
+
+  const cropBar = document.createElement('div');
+  cropBar.id = 'cropActionBar';
+  cropBar.className = 'crop-action-bar';
+
+  const applyBtn = document.createElement('button');
+  applyBtn.textContent = '✂ 크롭 적용';
+  applyBtn.className = 'crop-action-btn crop-apply';
+  applyBtn.addEventListener('click', applyCropFromMode);
+
+  const resetBtn = document.createElement('button');
+  resetBtn.textContent = '↺ 초기화';
+  resetBtn.className = 'crop-action-btn crop-reset';
+  resetBtn.addEventListener('click', () => {
+    cropTop = 0; cropBottom = canvas.height;
+    cropLeft = 0; cropRight = canvas.width;
+    renderCropOverlay();
+  });
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = '✕ 취소';
+  cancelBtn.className = 'crop-action-btn crop-cancel';
+  cancelBtn.addEventListener('click', () => exitCropMode());
+
+  cropBar.appendChild(applyBtn);
+  cropBar.appendChild(resetBtn);
+  cropBar.appendChild(cancelBtn);
+
+  hintEl.style.display = 'none';
+  hintEl.parentElement.appendChild(cropBar);
+  renderCropOverlay();
+}
+
+function exitCropMode() {
+  cropMode = false;
+  cropDragging = null;
+  canvas.style.cursor = 'crosshair';
+  const cropBar = document.getElementById('cropActionBar');
+  if (cropBar) cropBar.remove();
+  hintEl.style.display = '';
+  hintEl.textContent = toolHints[currentTool] || '';
+  render();
+}
+
+function applyCropFromMode() {
+  if (!bgImage) return;
+
+  const t = Math.min(cropTop, cropBottom);
+  const b = Math.max(cropTop, cropBottom);
+  const l = Math.min(cropLeft, cropRight);
+  const r = Math.max(cropLeft, cropRight);
+  const cw = r - l, ch = b - t;
+
+  if (cw < 20 || ch < 20) {
+    alert('크롭 영역이 너무 작습니다.');
+    return;
+  }
+
+  saveUndoState();
+
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = cw;
+  tempCanvas.height = ch;
+  const tCtx = tempCanvas.getContext('2d');
+  tCtx.drawImage(bgImage, l, t, cw, ch, 0, 0, cw, ch);
+
+  const newImg = new Image();
+  newImg.onload = () => {
+    bgImage = newImg;
+    bgDataUrl = tempCanvas.toDataURL('image/jpeg', 0.9);
+    canvas.width = cw;
+    canvas.height = ch;
+    annotations.forEach(ann => { ann.x -= l; ann.y -= t; });
+    exitCropMode();
+    render();
+    renderDescList();
+    hintEl.textContent = '크롭 완료!';
+  };
+  newImg.src = tempCanvas.toDataURL('image/jpeg', 0.9);
+}
+
+function renderCropOverlay() {
+  if (!cropMode || !bgImage) return;
+  render();
+
+  const t = Math.min(cropTop, cropBottom);
+  const b = Math.max(cropTop, cropBottom);
+  const l = Math.min(cropLeft, cropRight);
+  const r = Math.max(cropLeft, cropRight);
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.fillRect(0, 0, canvas.width, t);
+  ctx.fillRect(0, b, canvas.width, canvas.height - b);
+  ctx.fillRect(0, t, l, b - t);
+  ctx.fillRect(r, t, canvas.width - r, b - t);
+
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([8, 4]);
+  ctx.strokeRect(l, t, r - l, b - t);
+  ctx.setLineDash([]);
+
+  drawHorizontalHandle(t, '#4a90d9', '▲ 위');
+  drawHorizontalHandle(b, '#e6832a', '▼ 아래');
+  drawVerticalHandle(l, '#34c759', '◀ 좌');
+  drawVerticalHandle(r, '#af52de', '▶ 우');
+
+  const info = `${Math.round(r - l)} × ${Math.round(b - t)}px`;
+  const cx = (l + r) / 2, cy = (t + b) / 2;
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.font = 'bold 13px sans-serif';
+  const tw = ctx.measureText(info).width;
+  ctx.fillRect(cx - tw / 2 - 10, cy - 14, tw + 20, 28);
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(info, cx, cy);
+}
+
+function drawHorizontalHandle(y, color, label) {
+  const l = Math.min(cropLeft, cropRight);
+  const r = Math.max(cropLeft, cropRight);
+  ctx.strokeStyle = color; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(l, y); ctx.lineTo(r, y); ctx.stroke();
+  const hx = (l + r) / 2;
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.roundRect(hx - 30, y - 11, 60, 22, 11); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(label, hx, y);
+}
+
+function drawVerticalHandle(x, color, label) {
+  const t = Math.min(cropTop, cropBottom);
+  const b = Math.max(cropTop, cropBottom);
+  ctx.strokeStyle = color; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(x, t); ctx.lineTo(x, b); ctx.stroke();
+  const hy = (t + b) / 2;
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.roundRect(x - 20, hy - 11, 40, 22, 11); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 10px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(label, x, hy);
+}
+
+function getCropHandleAt(px, py) {
+  const t = Math.min(cropTop, cropBottom), b = Math.max(cropTop, cropBottom);
+  const l = Math.min(cropLeft, cropRight), r = Math.max(cropLeft, cropRight);
+  const dTop = Math.abs(py - cropTop), dBottom = Math.abs(py - cropBottom);
+  const dLeft = Math.abs(px - cropLeft), dRight = Math.abs(px - cropRight);
+  const inH = px >= l - CROP_HANDLE_HIT && px <= r + CROP_HANDLE_HIT;
+  const inV = py >= t - CROP_HANDLE_HIT && py <= b + CROP_HANDLE_HIT;
+
+  const c = [];
+  if (inH && dTop < CROP_HANDLE_HIT) c.push({ h: 'top', d: dTop });
+  if (inH && dBottom < CROP_HANDLE_HIT) c.push({ h: 'bottom', d: dBottom });
+  if (inV && dLeft < CROP_HANDLE_HIT) c.push({ h: 'left', d: dLeft });
+  if (inV && dRight < CROP_HANDLE_HIT) c.push({ h: 'right', d: dRight });
+  if (!c.length) return null;
+  c.sort((a, b) => a.d - b.d);
+  return c[0].h;
+}
+
+// ══════════════════════════════════════
+// 캔버스 이벤트
+// ══════════════════════════════════════
+canvas.addEventListener('mousedown', (e) => {
+  if (activeTextInput) return;
+
+  const r = canvas.getBoundingClientRect();
+  const sx = canvas.width / r.width, sy = canvas.height / r.height;
+  const px = (e.clientX - r.left) * sx, py = (e.clientY - r.top) * sy;
+
+  // 크롭 모드
+  if (cropMode) {
+    const handle = getCropHandleAt(px, py);
+    if (handle) {
+      cropDragging = handle;
+      canvas.style.cursor = (handle === 'top' || handle === 'bottom') ? 'ns-resize' : 'ew-resize';
+    }
+    return;
+  }
+
+  // 선택 도구
+  if (currentTool === 'select') {
+    const idx = hitTest(px, py);
+    selectedIndex = idx;
+    render();
+    if (selectedIndex >= 0) drawSelection(annotations[selectedIndex]);
+    renderDescList();
+    return;
+  }
+
+  // 텍스트 도구
+  if (currentTool === 'text') {
+    e.preventDefault();
+    createInlineTextInput(px, py);
+    return;
+  }
+
+  // 넘버링 도구: 클릭하면 원형 번호 마커 배치
+  if (currentTool === 'numbering') {
+    saveUndoState();
+    const nextNum = annotations.length + 1;
+    annotations.push({
+      type: 'numbering', x: px, y: py, w: 0, h: 0,
+      number: nextNum, description: '', _addedAt: Date.now()
     });
     render();
     renderDescList();
@@ -147,44 +605,61 @@ canvas.addEventListener('mousedown', (e) => {
   }
 
   isDrawing = true;
-  const r = canvas.getBoundingClientRect();
-  const sx = canvas.width / r.width;
-  const sy = canvas.height / r.height;
-  startX = (e.clientX - r.left) * sx;
-  startY = (e.clientY - r.top) * sy;
+  startX = px;
+  startY = py;
 });
 
 canvas.addEventListener('mousemove', (e) => {
-  if (!isDrawing) return;
-  const r = canvas.getBoundingClientRect();
-  const sx = canvas.width / r.width;
-  const sy = canvas.height / r.height;
-  const curX = (e.clientX - r.left) * sx;
-  const curY = (e.clientY - r.top) * sy;
-  render();
+  if (activeTextInput) return;
 
+  const r = canvas.getBoundingClientRect();
+  const sx = canvas.width / r.width, sy = canvas.height / r.height;
+  const curX = (e.clientX - r.left) * sx, curY = (e.clientY - r.top) * sy;
+
+  if (cropMode) {
+    if (cropDragging) {
+      if (cropDragging === 'top') cropTop = Math.max(0, Math.min(curY, canvas.height));
+      else if (cropDragging === 'bottom') cropBottom = Math.max(0, Math.min(curY, canvas.height));
+      else if (cropDragging === 'left') cropLeft = Math.max(0, Math.min(curX, canvas.width));
+      else if (cropDragging === 'right') cropRight = Math.max(0, Math.min(curX, canvas.width));
+      renderCropOverlay();
+    } else {
+      const handle = getCropHandleAt(curX, curY);
+      if (handle === 'top' || handle === 'bottom') canvas.style.cursor = 'ns-resize';
+      else if (handle === 'left' || handle === 'right') canvas.style.cursor = 'ew-resize';
+      else canvas.style.cursor = 'default';
+    }
+    return;
+  }
+
+  if (!isDrawing) return;
+  render();
   if (currentTool === 'blur') {
     drawBlurPreview(ctx, startX, startY, curX - startX, curY - startY);
-  } else if (currentTool === 'crop') {
-    drawCropPreview(ctx, startX, startY, curX - startX, curY - startY);
   } else {
     drawShape(ctx, currentTool, startX, startY, curX - startX, curY - startY, 0, true);
   }
 });
 
 canvas.addEventListener('mouseup', (e) => {
+  if (activeTextInput) return;
+
+  if (cropMode) {
+    if (cropDragging) { cropDragging = null; canvas.style.cursor = 'default'; renderCropOverlay(); }
+    return;
+  }
+
   if (!isDrawing) return;
   isDrawing = false;
+
   const r = canvas.getBoundingClientRect();
-  const sx = canvas.width / r.width;
-  const sy = canvas.height / r.height;
-  const endX = (e.clientX - r.left) * sx;
-  const endY = (e.clientY - r.top) * sy;
-  let w = endX - startX;
-  let h = endY - startY;
+  const sx = canvas.width / r.width, sy = canvas.height / r.height;
+  const endX = (e.clientX - r.left) * sx, endY = (e.clientY - r.top) * sy;
+  let w = endX - startX, h = endY - startY;
 
   if (currentTool === 'blur') {
     if (Math.abs(w) > 5 && Math.abs(h) > 5) {
+      saveUndoState();
       effects.push({
         type: 'blur',
         x: Math.min(startX, startX + w), y: Math.min(startY, startY + h),
@@ -192,19 +667,7 @@ canvas.addEventListener('mouseup', (e) => {
         strength: parseInt(document.getElementById('blurStrength').value, 10),
         _addedAt: Date.now()
       });
-      // 블러를 원본 이미지에 베이크
       bakeBlurToImage();
-    }
-    render();
-    return;
-  }
-
-  if (currentTool === 'crop') {
-    if (Math.abs(w) > 20 && Math.abs(h) > 20) {
-      applyCrop(
-        Math.min(startX, startX + w), Math.min(startY, startY + h),
-        Math.abs(w), Math.abs(h)
-      );
     }
     render();
     return;
@@ -217,10 +680,10 @@ canvas.addEventListener('mouseup', (e) => {
     else { w = 120; h = 40; startX -= 60; startY -= 20; }
   }
 
+  saveUndoState();
   annotations.push({
     type: currentTool, x: startX, y: startY, w, h,
-    number: annotations.length + 1, description: '',
-    _addedAt: Date.now()
+    number: annotations.length + 1, description: '', _addedAt: Date.now()
   });
   render();
   renderDescList();
@@ -228,29 +691,28 @@ canvas.addEventListener('mouseup', (e) => {
 
 canvas.addEventListener('mouseleave', () => {
   if (isDrawing) { isDrawing = false; render(); }
+  if (cropMode && cropDragging) { cropDragging = null; canvas.style.cursor = 'default'; }
 });
 
-// ── 블러 처리 ──
+// ══════════════════════════════════════
+// 블러 처리
+// ══════════════════════════════════════
 function bakeBlurToImage() {
   const lastBlur = effects[effects.length - 1];
   if (!lastBlur || !bgImage) return;
 
-  // 현재 bgImage에서 블러 영역만 추출 → 블러 → 다시 그리기
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = bgImage.width || canvas.width;
   tempCanvas.height = bgImage.height || canvas.height;
   const tCtx = tempCanvas.getContext('2d');
   tCtx.drawImage(bgImage, 0, 0);
 
-  // 블러 영역 추출
   const bx = Math.max(0, Math.floor(lastBlur.x));
   const by = Math.max(0, Math.floor(lastBlur.y));
   const bw = Math.min(Math.ceil(lastBlur.w), tempCanvas.width - bx);
   const bh = Math.min(Math.ceil(lastBlur.h), tempCanvas.height - by);
-
   if (bw <= 0 || bh <= 0) return;
 
-  // 간단한 픽셀화 블러 (축소 후 확대)
   const strength = lastBlur.strength || 16;
   const blurCanvas = document.createElement('canvas');
   const scale = Math.max(1, strength);
@@ -261,7 +723,6 @@ function bakeBlurToImage() {
   tCtx.imageSmoothingEnabled = true;
   tCtx.drawImage(blurCanvas, 0, 0, blurCanvas.width, blurCanvas.height, bx, by, bw, bh);
 
-  // 새 이미지로 교체
   const newImg = new Image();
   newImg.onload = () => {
     bgImage = newImg;
@@ -272,83 +733,26 @@ function bakeBlurToImage() {
 }
 
 function drawBlurPreview(ctx, x, y, w, h) {
-  const rx = Math.min(x, x + w);
-  const ry = Math.min(y, y + h);
-  const rw = Math.abs(w);
-  const rh = Math.abs(h);
-
+  const rx = Math.min(x, x + w), ry = Math.min(y, y + h);
+  const rw = Math.abs(w), rh = Math.abs(h);
   ctx.save();
   ctx.setLineDash([6, 4]);
-  ctx.strokeStyle = '#4a90d9';
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#4a90d9'; ctx.lineWidth = 2;
   ctx.strokeRect(rx, ry, rw, rh);
   ctx.fillStyle = 'rgba(74, 144, 217, 0.15)';
   ctx.fillRect(rx, ry, rw, rh);
   ctx.setLineDash([]);
-  ctx.fillStyle = '#4a90d9';
-  ctx.font = 'bold 14px sans-serif';
+  ctx.fillStyle = '#4a90d9'; ctx.font = 'bold 14px sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText('BLUR', rx + rw / 2, ry + rh / 2 + 5);
   ctx.restore();
 }
 
-// ── 크롭 처리 ──
-function applyCrop(cx, cy, cw, ch) {
-  if (!bgImage) return;
+// ══════════════════════════════════════
+// 렌더링
+// ══════════════════════════════════════
+const BADGE_SIZE = 24;
 
-  const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = cw;
-  tempCanvas.height = ch;
-  const tCtx = tempCanvas.getContext('2d');
-  tCtx.drawImage(bgImage, cx, cy, cw, ch, 0, 0, cw, ch);
-
-  const newImg = new Image();
-  newImg.onload = () => {
-    bgImage = newImg;
-    bgDataUrl = tempCanvas.toDataURL('image/jpeg', 0.9);
-    canvas.width = cw;
-    canvas.height = ch;
-
-    // 기존 annotations 좌표 보정
-    annotations.forEach(ann => {
-      ann.x -= cx;
-      ann.y -= cy;
-    });
-
-    render();
-    renderDescList();
-    hintEl.textContent = '크롭 완료!';
-  };
-  newImg.src = tempCanvas.toDataURL('image/jpeg', 0.9);
-}
-
-function drawCropPreview(ctx, x, y, w, h) {
-  const rx = Math.min(x, x + w);
-  const ry = Math.min(y, y + h);
-  const rw = Math.abs(w);
-  const rh = Math.abs(h);
-
-  // 어두운 오버레이
-  ctx.save();
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  // 선택 영역은 밝게
-  ctx.clearRect(rx, ry, rw, rh);
-  ctx.drawImage(bgImage, rx, ry, rw, rh, rx, ry, rw, rh);
-  // 선택 영역에 있는 annotations도 다시 그리기
-  annotations.forEach(ann => {
-    drawShape(ctx, ann.type, ann.x, ann.y, ann.w, ann.h, ann.number, false);
-  });
-  // 선택 테두리
-  ctx.setLineDash([6, 4]);
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(rx, ry, rw, rh);
-  ctx.setLineDash([]);
-  ctx.restore();
-}
-
-// ── 렌더링 ──
 function render() {
   if (!bgImage) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -356,220 +760,156 @@ function render() {
   annotations.forEach(ann => {
     drawShape(ctx, ann.type, ann.x, ann.y, ann.w, ann.h, ann.number, false, ann);
   });
+  // 선택 표시
+  if (selectedIndex >= 0 && selectedIndex < annotations.length && currentTool === 'select') {
+    drawSelection(annotations[selectedIndex]);
+  }
 }
 
 function drawShape(ctx, type, x, y, w, h, number, isPreview, ann) {
   ctx.save();
   ctx.globalAlpha = isPreview ? 0.5 : 1;
+  let badgePos = null;
 
   if (type === 'rect') {
     const pad = 4;
-    const rx = Math.min(x, x + w) - pad;
-    const ry = Math.min(y, y + h) - pad;
-    const rw = Math.abs(w) + pad * 2;
-    const rh = Math.abs(h) + pad * 2;
-    ctx.beginPath();
-    ctx.roundRect(rx, ry, rw, rh, 8);
-    ctx.fillStyle = DRAW_FILL;
-    ctx.fill();
-    ctx.strokeStyle = DRAW_COLOR;
-    ctx.lineWidth = 3;
-    ctx.stroke();
-    if (number > 0) drawBadge(ctx, clampBadge(rx - 8, ry - 8));
+    const rx = Math.min(x, x + w) - pad, ry = Math.min(y, y + h) - pad;
+    const rw = Math.abs(w) + pad*2, rh = Math.abs(h) + pad*2;
+    ctx.beginPath(); ctx.roundRect(rx, ry, rw, rh, 8);
+    ctx.fillStyle = DRAW_FILL; ctx.fill();
+    ctx.strokeStyle = DRAW_COLOR; ctx.lineWidth = 3; ctx.stroke();
+    badgePos = { x: rx - 8, y: ry - 8 };
 
   } else if (type === 'arrow') {
     const ex = x + w, ey = y + h;
     ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ex, ey);
     ctx.strokeStyle = DRAW_COLOR; ctx.lineWidth = 3; ctx.stroke();
-    const angle = Math.atan2(h, w);
-    const hl = 18;
+    const angle = Math.atan2(h, w), hl = 18;
     ctx.beginPath();
     ctx.moveTo(ex, ey);
-    ctx.lineTo(ex - hl * Math.cos(angle - 0.4), ey - hl * Math.sin(angle - 0.4));
+    ctx.lineTo(ex - hl*Math.cos(angle-0.4), ey - hl*Math.sin(angle-0.4));
     ctx.moveTo(ex, ey);
-    ctx.lineTo(ex - hl * Math.cos(angle + 0.4), ey - hl * Math.sin(angle + 0.4));
+    ctx.lineTo(ex - hl*Math.cos(angle+0.4), ey - hl*Math.sin(angle+0.4));
     ctx.stroke();
-    if (number > 0) drawBadge(ctx, clampBadge(x - 14, y - 14));
+    badgePos = { x: x - 14, y: y - 14 };
 
   } else if (type === 'circle') {
-    const cx = x + w / 2, cy = y + h / 2;
-    const rx = Math.max(Math.abs(w) / 2, 4);
-    const ry = Math.max(Math.abs(h) / 2, 4);
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    const cx = x+w/2, cy = y+h/2;
+    const rx2 = Math.max(Math.abs(w)/2, 4), ry2 = Math.max(Math.abs(h)/2, 4);
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx2, ry2, 0, 0, Math.PI*2);
     ctx.fillStyle = DRAW_FILL; ctx.fill();
     ctx.strokeStyle = DRAW_COLOR; ctx.lineWidth = 3; ctx.stroke();
-    if (number > 0) drawBadge(ctx, clampBadge(cx - rx - 8, cy - ry - 8));
+    badgePos = { x: cx - rx2 - 8, y: cy - ry2 - 8 };
 
   } else if (type === 'text' && ann) {
-    const fontSize = ann.fontSize || 20;
-    const color = ann.color || '#e63232';
-    ctx.font = `bold ${fontSize}px 'Malgun Gothic', sans-serif`;
-    ctx.fillStyle = color;
+    const fs = ann.fontSize || 20;
+    const clr = ann.color || '#e63232';
+    ctx.font = `bold ${fs}px 'Malgun Gothic', sans-serif`;
     ctx.textBaseline = 'top';
-    // 배경
-    const textWidth = ctx.measureText(ann.text || '').width;
+    const tw = ctx.measureText(ann.text || '').width;
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.fillRect(x - 4, y - 2, textWidth + 8, fontSize + 6);
-    ctx.fillStyle = color;
+    ctx.fillRect(x - 4, y - 2, tw + 8, fs + 6);
+    ctx.fillStyle = clr;
     ctx.fillText(ann.text || '', x, y);
-    if (number > 0) drawBadge(ctx, clampBadge(x - 14, y - 14));
+    badgePos = { x: x - 14, y: y - 14 };
+
+  } else if (type === 'numbering') {
+    // 큰 원형 넘버링 마커 (독립 렌더링, badgePos 사용 안 함)
+    const radius = 18;
+    ctx.shadowColor = 'rgba(0,0,0,0.4)'; ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(230, 50, 50, 0.95)';
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3; ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 16px -apple-system, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(number), x, y);
+    // numbering은 자체 원이 번호이므로 badgePos 불필요
+    ctx.restore();
+    return;
+  }
+
+  if (number > 0 && badgePos) {
+    const bx = Math.max(2, Math.min(badgePos.x, canvas.width - BADGE_SIZE - 2));
+    const by = Math.max(2, Math.min(badgePos.y, canvas.height - BADGE_SIZE - 2));
+    ctx.shadowColor = 'rgba(0,0,0,0.3)'; ctx.shadowBlur = 4;
+    ctx.beginPath(); ctx.arc(bx+BADGE_SIZE/2, by+BADGE_SIZE/2, BADGE_SIZE/2, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(230,50,50,0.95)'; ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 13px -apple-system, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(number), bx+BADGE_SIZE/2, by+BADGE_SIZE/2);
   }
 
   ctx.restore();
 }
 
-function clampBadge(bx, by) {
-  const s = 24;
-  return {
-    x: Math.max(2, Math.min(bx, canvas.width - s - 2)),
-    y: Math.max(2, Math.min(by, canvas.height - s - 2))
-  };
-}
-
-function drawBadge(ctx, pos, num) {
-  // num이 없으면 현재 그리는 annotation의 number를 사용 (호출 측에서 처리)
-  const s = 24;
-  const x = pos.x, y = pos.y;
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.3)'; ctx.shadowBlur = 4;
-  ctx.beginPath(); ctx.arc(x + s/2, y + s/2, s/2, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(230,50,50,0.95)'; ctx.fill();
-  ctx.shadowColor = 'transparent';
-  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
-  ctx.restore();
-  // 번호는 render에서 annotation의 number로 그리므로 여기선 생략
-}
-
-// drawShape에서 호출하는 drawBadge를 번호 포함으로 변경
-const _origDrawShape = drawShape;
-drawShape = function(ctx, type, x, y, w, h, number, isPreview, ann) {
-  _origDrawShape(ctx, type, x, y, w, h, number, isPreview, ann);
-  // 번호 텍스트를 별도로 그리기 (drawBadge에서 원만 그리므로)
-};
-
-// 위의 drawBadge를 번호 포함 버전으로 재정의
-drawBadge = function(ctx, pos) {
-  // 이 함수는 drawShape 안에서 number와 함께 호출되므로,
-  // 번호는 drawShape 컨텍스트에서 접근
-};
-
-// 실제로는 통합 함수로 다시 작성
-// 위의 함수들을 덮어씀
-(function() {
-  const BADGE_SIZE = 24;
-
-  window.drawShape = function(ctx, type, x, y, w, h, number, isPreview, ann) {
-    ctx.save();
-    ctx.globalAlpha = isPreview ? 0.5 : 1;
-
-    let badgePos = null;
-
-    if (type === 'rect') {
-      const pad = 4;
-      const rx = Math.min(x, x + w) - pad, ry = Math.min(y, y + h) - pad;
-      const rw = Math.abs(w) + pad*2, rh = Math.abs(h) + pad*2;
-      ctx.beginPath(); ctx.roundRect(rx, ry, rw, rh, 8);
-      ctx.fillStyle = DRAW_FILL; ctx.fill();
-      ctx.strokeStyle = DRAW_COLOR; ctx.lineWidth = 3; ctx.stroke();
-      badgePos = { x: rx - 8, y: ry - 8 };
-
-    } else if (type === 'arrow') {
-      const ex = x + w, ey = y + h;
-      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ex, ey);
-      ctx.strokeStyle = DRAW_COLOR; ctx.lineWidth = 3; ctx.stroke();
-      const angle = Math.atan2(h, w), hl = 18;
-      ctx.beginPath();
-      ctx.moveTo(ex, ey);
-      ctx.lineTo(ex - hl*Math.cos(angle-0.4), ey - hl*Math.sin(angle-0.4));
-      ctx.moveTo(ex, ey);
-      ctx.lineTo(ex - hl*Math.cos(angle+0.4), ey - hl*Math.sin(angle+0.4));
-      ctx.stroke();
-      badgePos = { x: x - 14, y: y - 14 };
-
-    } else if (type === 'circle') {
-      const cx = x+w/2, cy = y+h/2;
-      const rx2 = Math.max(Math.abs(w)/2, 4), ry2 = Math.max(Math.abs(h)/2, 4);
-      ctx.beginPath(); ctx.ellipse(cx, cy, rx2, ry2, 0, 0, Math.PI*2);
-      ctx.fillStyle = DRAW_FILL; ctx.fill();
-      ctx.strokeStyle = DRAW_COLOR; ctx.lineWidth = 3; ctx.stroke();
-      badgePos = { x: cx - rx2 - 8, y: cy - ry2 - 8 };
-
-    } else if (type === 'text' && ann) {
-      const fs = ann.fontSize || 20;
-      const clr = ann.color || '#e63232';
-      ctx.font = `bold ${fs}px 'Malgun Gothic', sans-serif`;
-      ctx.textBaseline = 'top';
-      const tw = ctx.measureText(ann.text || '').width;
-      ctx.fillStyle = 'rgba(255,255,255,0.85)';
-      ctx.fillRect(x - 4, y - 2, tw + 8, fs + 6);
-      ctx.fillStyle = clr;
-      ctx.fillText(ann.text || '', x, y);
-      badgePos = { x: x - 14, y: y - 14 };
-    }
-
-    // 번호 배지
-    if (number > 0 && badgePos) {
-      const bx = Math.max(2, Math.min(badgePos.x, canvas.width - BADGE_SIZE - 2));
-      const by = Math.max(2, Math.min(badgePos.y, canvas.height - BADGE_SIZE - 2));
-
-      ctx.shadowColor = 'rgba(0,0,0,0.3)'; ctx.shadowBlur = 4;
-      ctx.beginPath(); ctx.arc(bx+BADGE_SIZE/2, by+BADGE_SIZE/2, BADGE_SIZE/2, 0, Math.PI*2);
-      ctx.fillStyle = 'rgba(230,50,50,0.95)'; ctx.fill();
-      ctx.shadowColor = 'transparent';
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
-
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 13px -apple-system, sans-serif';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(String(number), bx+BADGE_SIZE/2, by+BADGE_SIZE/2);
-    }
-
-    ctx.restore();
-  };
-
-  window.render = function() {
-    if (!bgImage) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(bgImage, 0, 0);
-    annotations.forEach(ann => {
-      drawShape(ctx, ann.type, ann.x, ann.y, ann.w, ann.h, ann.number, false, ann);
-    });
-  };
-})();
-
 function renumber() {
   annotations.forEach((ann, i) => ann.number = i + 1);
 }
 
-// ── 설명 목록 ──
+// ══════════════════════════════════════
+// 설명 목록
+// ══════════════════════════════════════
 function renderDescList() {
   descList.innerHTML = '';
   if (annotations.length === 0) {
     descList.innerHTML = '<div class="desc-empty">도형을 그리면 여기에 설명란이 생깁니다</div>';
     return;
   }
-  const typeNames = { rect: '사각형', arrow: '화살표', circle: '원형', text: '텍스트' };
+  const typeNames = { rect: '사각형', arrow: '화살표', circle: '원형', text: '텍스트', numbering: '넘버링' };
   annotations.forEach((ann, i) => {
     const item = document.createElement('div');
-    item.className = 'desc-item';
+    item.className = 'desc-item' + (selectedIndex === i ? ' desc-item-selected' : '');
 
     const header = document.createElement('div');
     header.className = 'desc-item-header';
+
     const badge = document.createElement('span');
     badge.className = 'desc-badge';
     badge.textContent = ann.number;
+
     const typeLbl = document.createElement('span');
     typeLbl.className = 'desc-type';
     typeLbl.textContent = typeNames[ann.type] || ann.type;
+
+    // 선택 버튼
+    const selectBtn = document.createElement('button');
+    selectBtn.className = 'desc-select-btn';
+    selectBtn.textContent = '선택';
+    selectBtn.addEventListener('click', () => {
+      selectedIndex = i;
+      currentTool = 'select';
+      document.querySelectorAll('.tool-btn[data-tool]').forEach(b => {
+        b.classList.toggle('active', b.dataset.tool === 'select');
+      });
+      canvas.style.cursor = 'pointer';
+      hintEl.textContent = toolHints.select;
+      render();
+      renderDescList();
+    });
+
     const delBtn = document.createElement('button');
     delBtn.className = 'desc-del-btn';
     delBtn.textContent = '삭제';
     delBtn.addEventListener('click', () => {
-      annotations.splice(i, 1); renumber(); render(); renderDescList();
+      saveUndoState();
+      annotations.splice(i, 1);
+      renumber();
+      if (selectedIndex === i) selectedIndex = -1;
+      else if (selectedIndex > i) selectedIndex--;
+      render();
+      renderDescList();
     });
+
     header.appendChild(badge);
     header.appendChild(typeLbl);
+    header.appendChild(selectBtn);
     header.appendChild(delBtn);
 
     const ta = document.createElement('textarea');
@@ -583,9 +923,17 @@ function renderDescList() {
   });
 }
 
-// ── 저장 ──
+// ══════════════════════════════════════
+// 최종 저장
+// ══════════════════════════════════════
 document.getElementById('saveBtn').addEventListener('click', () => {
   if (!viewport || !bgImage) return;
+  if (cropMode) exitCropMode();
+  if (activeTextInput) commitInlineText();
+  selectedIndex = -1;
+
+  if (!confirm('최종 저장하시겠습니까? 저장 후 편집기가 닫힙니다.')) return;
+
   const invScale = 1 / imgScale;
 
   const markers = annotations.map((ann, i) => ({
@@ -602,7 +950,6 @@ document.getElementById('saveBtn').addEventListener('click', () => {
     description: ann.description || (ann.type === 'text' ? ann.text : '')
   }));
 
-  // 최종 이미지 생성 (annotations 포함)
   render();
   const markedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
 
@@ -611,7 +958,7 @@ document.getElementById('saveBtn').addEventListener('click', () => {
     stepIndex,
     markers,
     screenshotWithMarker: markedDataUrl,
-    screenshot: bgDataUrl, // 블러/크롭이 적용된 원본도 갱신
+    screenshot: bgDataUrl,
     description: markers.map((m,i) => `${i+1}. ${m.description||''}`).filter(d=>d.length>3).join('\n')
   }, (response) => {
     if (response?.success) {

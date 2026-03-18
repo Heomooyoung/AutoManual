@@ -15,15 +15,17 @@
         <button class="tool-btn" data-tool="arrow" title="화살표">→ 화살표</button>
         <button class="tool-btn" data-tool="circle" title="원형">● 원형</button>
         <button class="tool-btn" data-tool="text" title="텍스트">T 텍스트</button>
+        <button class="tool-btn" data-tool="numbering" title="넘버링">① 넘버링</button>
         <button class="tool-btn" data-tool="blur" title="블러">◫ 블러</button>
         <button class="tool-btn" data-tool="crop" title="크롭">⬒ 크롭</button>
         <span class="toolbar-sep"></span>
-        <button class="tool-btn tool-undo" id="undoBtn" title="실행취소">↩ 취소</button>
+        <button class="tool-btn" data-tool="select" title="선택/삭제">🖱 선택</button>
+        <span class="toolbar-sep"></span>
+        <button class="tool-btn tool-undo" id="undoBtn" title="실행취소 (Undo)">↩ Undo</button>
         <button class="tool-btn tool-clear" id="clearBtn" title="전체삭제">🗑 초기화</button>
       </div>
       <!-- 텍스트 도구 옵션 바 -->
       <div class="tool-options" id="textOptions" style="display:none;">
-        <label>텍스트: <input type="text" id="textInput" placeholder="입력할 텍스트..." value=""></label>
         <label>크기: <select id="textSize">
           <option value="16">16px</option>
           <option value="20" selected>20px</option>
@@ -31,6 +33,7 @@
           <option value="36">36px</option>
         </select></label>
         <label>색상: <input type="color" id="textColor" value="#e63232"></label>
+        <span style="color:#6b7b9e; font-size:11px;">클릭한 위치에서 직접 입력</span>
       </div>
       <!-- 블러 강도 옵션 -->
       <div class="tool-options" id="blurOptions" style="display:none;">
@@ -50,7 +53,10 @@
     <div class="editor-desc-panel">
       <div class="desc-panel-header">
         <span>마커별 설명</span>
-        <button id="saveBtn" class="save-btn">💾 저장</button>
+        <div class="desc-panel-btns">
+          <button id="closeBtn" class="close-btn">✕ 닫기</button>
+          <button id="saveBtn" class="save-btn">💾 최종 저장</button>
+        </div>
       </div>
       <div class="desc-list" id="descList">
         <div class="desc-empty">도형을 그리면 여기에 설명란이 생깁니다</div>

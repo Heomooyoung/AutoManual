@@ -191,7 +191,7 @@ function doCapture(event) {
     data: clickData
   }).then((response) => {
     if (response?.captured) {
-      console.log(`[StepHow] Step ${response.stepNumber} 캡처 완료`);
+      console.log(`[DX-AutoManual] Step ${response.stepNumber} 캡처 완료`);
     }
   }).catch(() => {
     // 확장 컨텍스트가 무효화된 경우 무시
