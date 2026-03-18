@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>StepHow - 편집기</title>
+  <link rel="stylesheet" href="editor.css">
+</head>
+<body>
+  <div class="editor-layout">
+    <!-- 좌측: 캔버스 영역 -->
+    <div class="editor-canvas-area">
+      <div class="toolbar">
+        <span class="toolbar-title">도구</span>
+        <button class="tool-btn active" data-tool="rect" title="사각형">▭ 사각형</button>
+        <button class="tool-btn" data-tool="arrow" title="화살표">→ 화살표</button>
+        <button class="tool-btn" data-tool="circle" title="원형">● 원형</button>
+        <span class="toolbar-sep"></span>
+        <button class="tool-btn tool-undo" id="undoBtn" title="실행취소">↩ 취소</button>
+        <button class="tool-btn tool-clear" id="clearBtn" title="전체삭제">🗑 초기화</button>
+      </div>
+      <div class="canvas-container" id="canvasContainer">
+        <canvas id="editorCanvas"></canvas>
+      </div>
+      <div class="canvas-hint">클릭하고 드래그하여 도형을 그리세요. 번호는 자동으로 매겨집니다.</div>
+    </div>
+
+    <!-- 우측: 설명 패널 -->
+    <div class="editor-desc-panel">
+      <div class="desc-panel-header">
+        <span>마커별 설명</span>
+        <button id="saveBtn" class="save-btn">💾 저장</button>
+      </div>
+      <div class="desc-list" id="descList">
+        <div class="desc-empty">도형을 그리면 여기에 설명란이 생깁니다</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="editor.js"></script>
+</body>
+</html>

@@ -1,0 +1,229 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Malgun Gothic', -apple-system, sans-serif;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.editor-layout {
+  display: flex;
+  height: 100vh;
+}
+
+/* ── 좌측: 캔버스 ── */
+.editor-canvas-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: #252542;
+  border-bottom: 1px solid #3a3a5c;
+}
+
+.toolbar-title {
+  font-size: 12px;
+  color: #6b7b9e;
+  margin-right: 8px;
+  font-weight: 700;
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 24px;
+  background: #3a3a5c;
+  margin: 0 6px;
+}
+
+.tool-btn {
+  padding: 6px 14px;
+  border: 1px solid #3a3a5c;
+  border-radius: 6px;
+  background: #2c2c4a;
+  color: #c0c0d0;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tool-btn:hover {
+  background: #3a3a5c;
+  color: #ffffff;
+}
+
+.tool-btn.active {
+  background: #4a90d9;
+  color: #ffffff;
+  border-color: #4a90d9;
+}
+
+.tool-undo { color: #f0ad4e; border-color: #5a4a2a; }
+.tool-undo:hover { background: #5a4a2a; }
+.tool-clear { color: #e65050; border-color: #5a2a2a; }
+.tool-clear:hover { background: #5a2a2a; }
+
+.canvas-container {
+  flex: 1;
+  position: relative;
+  overflow: auto;
+  background: #111128;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#editorCanvas {
+  cursor: crosshair;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.canvas-hint {
+  padding: 6px 14px;
+  background: #252542;
+  border-top: 1px solid #3a3a5c;
+  font-size: 11px;
+  color: #6b7b9e;
+  text-align: center;
+}
+
+/* ── 우측: 설명 패널 ── */
+.editor-desc-panel {
+  width: 320px;
+  background: #222240;
+  border-left: 1px solid #3a3a5c;
+  display: flex;
+  flex-direction: column;
+}
+
+.desc-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #2c3e6b;
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.save-btn {
+  padding: 6px 16px;
+  border: none;
+  border-radius: 6px;
+  background: #34c759;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.save-btn:hover {
+  background: #2db84d;
+}
+
+.desc-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.desc-empty {
+  text-align: center;
+  padding: 40px 16px;
+  color: #6b7b9e;
+  font-size: 13px;
+}
+
+.desc-item {
+  background: #2c2c4a;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  overflow: hidden;
+  border: 1px solid #3a3a5c;
+}
+
+.desc-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #333358;
+}
+
+.desc-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #e63232;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.desc-type {
+  font-size: 11px;
+  color: #8888aa;
+  flex: 1;
+}
+
+.desc-del-btn {
+  background: none;
+  border: 1px solid #4a4a6a;
+  border-radius: 4px;
+  color: #888;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.desc-del-btn:hover {
+  background: #5a2a2a;
+  border-color: #e65050;
+  color: #e65050;
+}
+
+.desc-item textarea {
+  width: 100%;
+  border: none;
+  background: #2c2c4a;
+  color: #e0e0e0;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  resize: none;
+  min-height: 50px;
+  outline: none;
+  line-height: 1.5;
+}
+
+.desc-item textarea::placeholder {
+  color: #555570;
+}
+
+.desc-item textarea:focus {
+  background: #333358;
+}
+
+/* 스크롤바 */
+.desc-list::-webkit-scrollbar { width: 5px; }
+.desc-list::-webkit-scrollbar-track { background: transparent; }
+.desc-list::-webkit-scrollbar-thumb { background: #4a4a6a; border-radius: 3px; }
+.canvas-container::-webkit-scrollbar { width: 5px; height: 5px; }
+.canvas-container::-webkit-scrollbar-thumb { background: #4a4a6a; border-radius: 3px; }

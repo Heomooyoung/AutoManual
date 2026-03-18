@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StepHow Clone</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <!-- 헤더 -->
+  <header class="header">
+    <h1 class="header-title">📋 StepHow Clone</h1>
+    <span class="header-version">v0.1</span>
+  </header>
+
+  <!-- 매뉴얼 제목 입력 -->
+  <div class="manual-title-section">
+    <input
+      type="text"
+      id="manualTitle"
+      class="manual-title-input"
+      placeholder="매뉴얼 제목을 입력하세요"
+      value=""
+    >
+  </div>
+
+  <!-- 캡처 모드 선택 -->
+  <div class="capture-mode-section">
+    <label class="capture-mode-label">캡처 모드</label>
+    <div class="capture-mode-options">
+      <button id="modePerClick" class="mode-btn active" data-mode="per-click">
+        📸 클릭당 1장
+      </button>
+      <button id="modePerPage" class="mode-btn" data-mode="per-page">
+        🖼️ 화면당 1장
+      </button>
+    </div>
+    <p class="capture-mode-hint" id="modeHint">클릭할 때마다 새 스크린샷을 캡처합니다</p>
+  </div>
+
+  <!-- 녹화 컨트롤 -->
+  <div class="record-control">
+    <button id="recordBtn" class="btn btn-record">
+      <span class="record-dot"></span>
+      <span id="recordBtnText">녹화 시작</span>
+    </button>
+    <span id="stepCount" class="step-count">0 단계</span>
+  </div>
+
+  <!-- 단계 목록 -->
+  <div id="stepList" class="step-list">
+    <div class="empty-state" id="emptyState">
+      <div class="empty-icon">🖱️</div>
+      <p>녹화를 시작한 후<br>웹페이지에서 클릭하세요</p>
+      <p class="empty-hint">클릭할 때마다 자동으로 캡처됩니다</p>
+    </div>
+  </div>
+
+  <!-- 하단 버튼 -->
+  <div class="bottom-bar" id="bottomBar" style="display: none;">
+    <button id="previewBtn" class="btn btn-preview">
+      👁️ 미리보기
+    </button>
+    <div class="export-dropdown">
+      <button id="exportBtn" class="btn btn-export">
+        📥 내보내기 ▼
+      </button>
+      <div class="export-menu" id="exportMenu">
+        <button data-format="html">📄 HTML</button>
+        <button data-format="pdf" class="coming-soon">📕 PDF (준비 중)</button>
+        <button data-format="pptx">📊 PPT</button>
+        <button data-format="gif" class="coming-soon">🎞️ GIF (준비 중)</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="../vendor/pptxgen.bundle.js"></script>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

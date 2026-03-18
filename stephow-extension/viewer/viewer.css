@@ -1,0 +1,164 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Malgun Gothic', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #e8ecf4;
+  color: #1a1a2e;
+}
+
+.viewer-container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 40px 20px;
+}
+
+.viewer-header {
+  margin-bottom: 32px;
+}
+
+.viewer-header h1 {
+  font-size: 28px;
+  font-weight: 700;
+  color: #1b2a4a;
+  margin-bottom: 8px;
+}
+
+.viewer-meta {
+  color: #6b7b9e;
+  font-size: 14px;
+}
+
+/* 단계: 좌측 캡처 + 우측 설명 */
+.step {
+  display: flex;
+  gap: 0;
+  background: #ffffff;
+  border-radius: 12px;
+  margin-bottom: 24px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(27, 42, 74, 0.08);
+  border: 1px solid #c8d1e0;
+}
+
+.step-left {
+  flex: 7;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.step-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 18px;
+  background: #1b2a4a;
+}
+
+.step-num {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  background: #4a90d9;
+  padding: 3px 12px;
+  border-radius: 5px;
+}
+
+.step-url {
+  font-size: 11px;
+  color: #6b7b9e;
+}
+
+.step-left img {
+  width: 100%;
+  display: block;
+}
+
+.step-right {
+  flex: 3;
+  min-width: 200px;
+  max-width: 320px;
+  background: #f4f6fa;
+  border-left: 1px solid #c8d1e0;
+  display: flex;
+  flex-direction: column;
+}
+
+.step-right-header {
+  padding: 12px 16px;
+  background: #2c3e6b;
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffffff;
+  text-align: center;
+}
+
+.step-element-tag {
+  padding: 8px 14px;
+  background: #e8ecf4;
+  font-size: 11px;
+  color: #3d5a99;
+  border-bottom: 1px solid #c8d1e0;
+}
+
+.step-desc {
+  padding: 16px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #1a1a2e;
+  flex: 1;
+  white-space: pre-wrap;
+}
+
+/* 마커별 설명 행 */
+.step-marker-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #e8ecf4;
+}
+
+.step-marker-row:last-child {
+  border-bottom: none;
+}
+
+.step-marker-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #e63232;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.step-marker-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #1a1a2e;
+}
+
+.viewer-footer {
+  text-align: center;
+  color: #6b7b9e;
+  font-size: 12px;
+  margin-top: 40px;
+  padding: 24px;
+}
+
+@media (max-width: 768px) {
+  .step {
+    flex-direction: column;
+  }
+  .step-right {
+    max-width: none;
+    border-left: none;
+    border-top: 1px solid #c8d1e0;
+  }
+}

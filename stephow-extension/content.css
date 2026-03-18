@@ -1,0 +1,26 @@
+/* 클릭 시 물결 피드백 애니메이션 */
+.stephow-click-feedback {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(230, 50, 50, 0.4);
+  border: 2px solid rgba(230, 50, 50, 0.8);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 2147483647;
+  animation: stephow-ripple 0.6s ease-out forwards;
+}
+
+@keyframes stephow-ripple {
+  0% {
+    width: 10px;
+    height: 10px;
+    opacity: 1;
+  }
+  100% {
+    width: 60px;
+    height: 60px;
+    opacity: 0;
+  }
+}
