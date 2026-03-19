@@ -7,9 +7,55 @@ const params = new URLSearchParams(location.search);
 const title = params.get('title') || '매뉴얼';
 
 let allSteps = [];
+let viewerReRecordIndex = null;
 
 // ── 초기 로드 ──
 loadAndRender();
+
+// ── 재녹화 배너 (동적 생성) ──
+function createReRecordBanner() {
+  if (document.getElementById('viewerReRecordBanner')) return;
+  const banner = document.createElement('div');
+  banner.id = 'viewerReRecordBanner';
+  banner.className = 'viewer-re-record-banner';
+  banner.style.display = 'none';
+  banner.innerHTML = `
+    <span id="viewerReRecordMsg">재녹화 중...</span>
+    <div class="viewer-re-record-btns">
+      <button id="viewerReRecordFinish" class="viewer-re-record-finish" style="display:none;">완료</button>
+      <button id="viewerReRecordCancel" class="viewer-re-record-cancel">취소</button>
+    </div>
+  `;
+  document.body.insertBefore(banner, document.body.firstChild);
+
+  document.getElementById('viewerReRecordCancel').addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'CANCEL_RE_RECORD' }, () => {
+      viewerReRecordIndex = null;
+      banner.style.display = 'none';
+    });
+  });
+
+  document.getElementById('viewerReRecordFinish').addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'FINISH_RE_RECORD' }, (response) => {
+      viewerReRecordIndex = null;
+      banner.style.display = 'none';
+      if (response?.success) loadAndRender();
+      else alert(response?.error || '재녹화 완료 실패');
+    });
+  });
+}
+
+function startViewerReRecord(stepIndex, stepNumber) {
+  createReRecordBanner();
+  viewerReRecordIndex = stepIndex;
+  const banner = document.getElementById('viewerReRecordBanner');
+  const msg = document.getElementById('viewerReRecordMsg');
+  const finishBtn = document.getElementById('viewerReRecordFinish');
+  msg.textContent = `Step ${stepNumber} 재녹화 중 — 웹페이지를 클릭하세요 (0장 캡처됨)`;
+  finishBtn.style.display = 'none';
+  banner.style.display = 'flex';
+  chrome.runtime.sendMessage({ type: 'START_RE_RECORD', stepIndex });
+}
 
 function loadAndRender() {
   chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
@@ -36,7 +82,7 @@ function renderSteps() {
 
   allSteps.forEach((step, si) => {
     const div = document.createElement('div');
-    div.className = 'step';
+    div.className = 'step' + (step.modified ? ' step-modified' : '');
 
     // ── 좌측: 헤더 + 스크린샷 ──
     const left = document.createElement('div');
@@ -50,6 +96,14 @@ function renderSteps() {
     const num = document.createElement('span');
     num.className = 'step-num';
     num.textContent = `Step ${step.stepNumber}`;
+    // 수정됨 배지
+    if (step.modified) {
+      const modBadge = document.createElement('span');
+      modBadge.className = 'step-modified-badge';
+      modBadge.textContent = step.changeType === 're-recorded' ? '🔄 재녹화됨' : '✏️ 수정됨';
+      num.appendChild(document.createTextNode(' '));
+      num.appendChild(modBadge);
+    }
     const url = document.createElement('span');
     url.className = 'step-url';
     url.textContent = step.pageTitle || '';
@@ -91,6 +145,15 @@ function renderSteps() {
       chrome.runtime.sendMessage({ type: 'DELETE_STEP', index: si }, () => loadAndRender());
     });
 
+    // 재녹화 버튼
+    const reRecBtn = document.createElement('button');
+    reRecBtn.textContent = '🔄 재녹화';
+    reRecBtn.title = '이 단계 재녹화';
+    reRecBtn.addEventListener('click', () => {
+      startViewerReRecord(si, step.stepNumber);
+    });
+
+    headerActions.appendChild(reRecBtn);
     headerActions.appendChild(editBtn);
     headerActions.appendChild(upBtn);
     headerActions.appendChild(downBtn);
@@ -105,6 +168,17 @@ function renderSteps() {
     img.addEventListener('click', () => openFullscreen(img.src));
 
     left.appendChild(header);
+
+    // 변경 요약 바
+    if (step.modified && step.changeSummary) {
+      const changeBanner = document.createElement('div');
+      changeBanner.className = 'step-change-banner';
+      const typeLabel = step.changeType === 're-recorded' ? '🔄 재녹화' : '✏️ 편집';
+      const timeStr = step.modifiedAt ? new Date(step.modifiedAt).toLocaleString('ko-KR') : '';
+      changeBanner.textContent = `${typeLabel}: ${step.changeSummary} (${timeStr})`;
+      left.appendChild(changeBanner);
+    }
+
     left.appendChild(img);
 
     // ── 우측: 마커별 편집 가능 설명 ──
@@ -221,6 +295,11 @@ document.getElementById('saveAllBtn').addEventListener('click', () => {
   alert('모든 변경사항이 저장되었습니다.');
 });
 
+// ── 닫기 ──
+document.getElementById('closeViewerBtn').addEventListener('click', () => {
+  window.close();
+});
+
 // ── HTML 내보내기 ──
 document.getElementById('exportHtmlBtn').addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
@@ -242,6 +321,9 @@ body{font-family:'Malgun Gothic',-apple-system,sans-serif;max-width:1100px;margi
 h1{font-size:28px;margin-bottom:8px;color:#1b2a4a}
 .meta{color:#6b7b9e;font-size:13px;margin-bottom:32px}
 .step{display:flex;background:#fff;border-radius:12px;margin-bottom:24px;overflow:hidden;box-shadow:0 2px 8px rgba(27,42,74,.08);border:1px solid #c8d1e0}
+.step.modified{border:3px solid #7c3aed;box-shadow:0 4px 20px rgba(124,58,237,.2)}
+.change-banner{padding:8px 18px;background:linear-gradient(90deg,#faf5ff,#ede9fe);border-bottom:2px solid #7c3aed;border-left:4px solid #7c3aed;font-size:12px;color:#6d28d9;font-weight:600}
+.mod-badge{display:inline-block;font-size:10px;font-weight:700;color:#fff;background:#7c3aed;padding:2px 8px;border-radius:8px;margin-left:6px}
 .step-left{flex:7;min-width:0}
 .step-header{padding:12px 18px;background:#1b2a4a;display:flex;justify-content:space-between;align-items:center}
 .step-num{font-weight:700;color:#fff;font-size:13px;background:#4a90d9;padding:3px 12px;border-radius:5px}
@@ -270,12 +352,18 @@ ${steps.map(step => {
   } else {
     descHtml = `<div style="padding:16px;font-size:13px">${esc(step.description||'')}</div>`;
   }
-  return `<div class="step">
+  const modClass = step.modified ? ' modified' : '';
+  const modBadge = step.modified ? `<span class="mod-badge">${step.changeType==='re-recorded'?'재녹화됨':'수정됨'}</span>` : '';
+  const changeBanner = step.modified && step.changeSummary
+    ? `<div class="change-banner">${step.changeType==='re-recorded'?'🔄':'✏️'} ${esc(step.changeSummary)}${step.modifiedAt?' ('+new Date(step.modifiedAt).toLocaleString('ko-KR')+')':''}</div>`
+    : '';
+  return `<div class="step${modClass}">
   <div class="step-left">
     <div class="step-header">
-      <span class="step-num">Step ${step.stepNumber}</span>
+      <span class="step-num">Step ${step.stepNumber}${modBadge}</span>
       <span class="step-url">${esc(step.pageTitle||'')}</span>
     </div>
+    ${changeBanner}
     <img src="${step.screenshotWithMarker}" alt="Step ${step.stepNumber}">
   </div>
   <div class="step-right">
@@ -304,9 +392,23 @@ function esc(text) {
   return d.innerHTML;
 }
 
-// ── 편집기 저장 후 자동 새로고침 ──
+// ── 메시지 수신 ──
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'EDITOR_SAVED') {
+    loadAndRender();
+  }
+  // 재녹화 진행
+  if (message.type === 'RE_RECORD_PROGRESS') {
+    const msg = document.getElementById('viewerReRecordMsg');
+    const finishBtn = document.getElementById('viewerReRecordFinish');
+    if (msg) msg.textContent = `Step ${message.stepIndex + 1} 재녹화 중 — ${message.capturedCount}장 캡처됨`;
+    if (finishBtn) finishBtn.style.display = 'inline-block';
+  }
+  // 재녹화 완료
+  if (message.type === 'RE_RECORD_DONE') {
+    viewerReRecordIndex = null;
+    const banner = document.getElementById('viewerReRecordBanner');
+    if (banner) banner.style.display = 'none';
     loadAndRender();
   }
 });

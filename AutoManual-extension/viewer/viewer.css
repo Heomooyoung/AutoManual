@@ -65,13 +65,20 @@ body {
 
 .btn-export:hover { background: #3a7bc8; }
 
+.btn-close {
+  background: #636366;
+  color: #fff;
+}
+
+.btn-close:hover { background: #48484a; }
+
 .edit-badge {
   padding: 4px 12px;
   border-radius: 12px;
   font-size: 11px;
   font-weight: 700;
-  background: #fff3e0;
-  color: #e67e22;
+  background: #f3e8ff;
+  color: #7c3aed;
   border: 1px solid #f0c27a;
 }
 
@@ -315,6 +322,101 @@ body {
   max-width: 95%;
   max-height: 95%;
   border-radius: 8px;
+}
+
+/* 수정됨 배지 */
+.step-modified-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  color: #ffffff;
+  background: #7c3aed;
+  padding: 3px 10px;
+  border-radius: 10px;
+  margin-left: 8px;
+  vertical-align: middle;
+  letter-spacing: 0.3px;
+  animation: badge-pulse 2s infinite;
+}
+
+@keyframes badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.75; }
+}
+
+/* 변경 요약 바 */
+.step-change-banner {
+  padding: 8px 18px;
+  background: linear-gradient(90deg, #faf5ff, #ede9fe);
+  border-bottom: 2px solid #7c3aed;
+  border-left: 4px solid #7c3aed;
+  font-size: 12px;
+  color: #6d28d9;
+  font-weight: 600;
+}
+
+/* 수정된 단계 카드 하이라이트 */
+.step.step-modified {
+  border: 3px solid #7c3aed;
+  box-shadow: 0 4px 20px rgba(124, 58, 237, 0.25);
+  position: relative;
+}
+
+/* 재녹화 배너 (뷰어) */
+.viewer-re-record-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  background: #f3e8ff;
+  border-bottom: 2px solid #7c3aed;
+  color: #7c3aed;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: 'Malgun Gothic', sans-serif;
+}
+
+.viewer-re-record-btns {
+  display: flex;
+  gap: 8px;
+}
+
+.viewer-re-record-finish {
+  padding: 6px 16px;
+  border: none;
+  border-radius: 6px;
+  background: #34c759;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.viewer-re-record-finish:hover {
+  background: #2db84d;
+}
+
+.viewer-re-record-cancel {
+  padding: 6px 16px;
+  border: 1px solid #7c3aed;
+  border-radius: 6px;
+  background: #fff;
+  color: #7c3aed;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.viewer-re-record-cancel:hover {
+  background: #7c3aed;
+  color: #fff;
 }
 
 @media (max-width: 768px) {

@@ -8,6 +8,7 @@ let isRecording = false;
 let steps = [];
 let captureMode = 'per-click';
 let globalClickNumber = 0;
+let reRecordTarget = null; // { stepIndex: number, newSteps: [] } — 재녹화 대상
 
 // Service Worker 재시작 시 저장된 데이터 복구
 chrome.storage.local.get(['stepsData', 'captureMode'], (result) => {
@@ -162,6 +163,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       step.screenshotWithMarker = message.screenshotWithMarker;
       if (message.screenshot) step.screenshot = message.screenshot;
       step.description = message.description;
+      // 변경 추적
+      step.modified = true;
+      step.modifiedAt = Date.now();
+      step.changeType = 'edited';
+      step.changeSummary = '편집기에서 수정되었습니다';
       persistSteps();
       sendResponse({ success: true });
     } else {
@@ -173,6 +179,134 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // 편집기 저장 완료 알림 (사이드 패널이 수신)
   if (message.type === 'EDITOR_SAVED') {
     sendResponse({ success: true });
+    return true;
+  }
+
+  // ─── 매뉴얼 저장 ───
+  if (message.type === 'SAVE_MANUAL') {
+    const manual = {
+      id: 'manual_' + Date.now(),
+      title: message.title || '제목 없음',
+      savedAt: Date.now(),
+      stepCount: steps.length,
+      steps: JSON.parse(JSON.stringify(steps))
+    };
+    chrome.storage.local.get(['savedManuals'], (result) => {
+      const manuals = result.savedManuals || [];
+      manuals.unshift(manual);
+      // 최대 20개 유지
+      if (manuals.length > 20) manuals.length = 20;
+      chrome.storage.local.set({ savedManuals: manuals }, () => {
+        sendResponse({ success: true, manual: { id: manual.id, title: manual.title, savedAt: manual.savedAt, stepCount: manual.stepCount } });
+      });
+    });
+    return true;
+  }
+
+  // ─── 저장된 매뉴얼 목록 조회 ───
+  if (message.type === 'GET_MANUALS') {
+    chrome.storage.local.get(['savedManuals'], (result) => {
+      const manuals = (result.savedManuals || []).map(m => ({
+        id: m.id,
+        title: m.title,
+        savedAt: m.savedAt,
+        stepCount: m.stepCount
+      }));
+      sendResponse({ manuals });
+    });
+    return true;
+  }
+
+  // ─── 매뉴얼 불러오기 ───
+  if (message.type === 'LOAD_MANUAL') {
+    chrome.storage.local.get(['savedManuals'], (result) => {
+      const manuals = result.savedManuals || [];
+      const found = manuals.find(m => m.id === message.manualId);
+      if (found) {
+        // 기존 steps를 불러온 매뉴얼로 교체, 원본 스냅샷 저장
+        steps = found.steps.map(s => ({
+          ...s,
+          _original: {
+            screenshot: s.screenshot,
+            screenshotWithMarker: s.screenshotWithMarker,
+            description: s.description,
+            markers: JSON.parse(JSON.stringify(s.markers || []))
+          },
+          modified: false,
+          modifiedAt: null,
+          changeType: null,
+          changeSummary: null
+        }));
+        persistSteps();
+        sendResponse({ success: true, title: found.title, steps });
+      } else {
+        sendResponse({ success: false, error: '매뉴얼을 찾을 수 없습니다' });
+      }
+    });
+    return true;
+  }
+
+  // ─── 매뉴얼 삭제 ───
+  if (message.type === 'DELETE_MANUAL') {
+    chrome.storage.local.get(['savedManuals'], (result) => {
+      let manuals = result.savedManuals || [];
+      manuals = manuals.filter(m => m.id !== message.manualId);
+      chrome.storage.local.set({ savedManuals: manuals }, () => {
+        sendResponse({ success: true });
+      });
+    });
+    return true;
+  }
+
+  // ─── 재녹화 시작 (특정 단계) ───
+  if (message.type === 'START_RE_RECORD') {
+    reRecordTarget = { stepIndex: message.stepIndex, newSteps: [] };
+    isRecording = true;
+    chrome.action.setBadgeText({ text: 'RE' });
+    chrome.action.setBadgeBackgroundColor({ color: '#7C3AED' });
+    broadcastToAllTabs(true);
+    sendResponse({ success: true });
+    return true;
+  }
+
+  // ─── 재녹화 취소 (원래 상태 복원) ───
+  if (message.type === 'CANCEL_RE_RECORD') {
+    reRecordTarget = null;
+    isRecording = false;
+    chrome.action.setBadgeText({ text: '' });
+    broadcastToAllTabs(false);
+    sendResponse({ success: true });
+    return true;
+  }
+
+  // ─── 재녹화 완료 (캡처한 것들로 교체) ───
+  if (message.type === 'FINISH_RE_RECORD') {
+    if (!reRecordTarget || reRecordTarget.newSteps.length === 0) {
+      reRecordTarget = null;
+      isRecording = false;
+      chrome.action.setBadgeText({ text: '' });
+      broadcastToAllTabs(false);
+      sendResponse({ success: false, error: '캡처된 단계가 없습니다' });
+      return true;
+    }
+
+    const idx = reRecordTarget.stepIndex;
+    const newSteps = reRecordTarget.newSteps;
+
+    // 원래 1개 단계를 제거하고, 그 자리에 새 단계들을 삽입
+    steps.splice(idx, 1, ...newSteps);
+
+    // 전체 stepNumber 재정렬
+    steps.forEach((s, i) => s.stepNumber = i + 1);
+    persistSteps();
+
+    reRecordTarget = null;
+    isRecording = false;
+    chrome.action.setBadgeText({ text: '' });
+    broadcastToAllTabs(false);
+
+    chrome.runtime.sendMessage({ type: 'RE_RECORD_DONE', steps }).catch(() => {});
+    sendResponse({ success: true, steps });
     return true;
   }
 
@@ -202,6 +336,103 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       format: 'jpeg',
       quality: 80
     }).then(async (dataUrl) => {
+      // ─── 재녹화 모드: 캡처를 누적 (완료 버튼으로 확정) ───
+      if (reRecordTarget !== null) {
+        const autoDesc = clickData.element.autoDescription || '';
+        const existingSteps = reRecordTarget.newSteps;
+
+        // 화면당 1장 모드: 같은 페이지면 기존 마지막 스텝에 마커 추가
+        if (captureMode === 'per-page' && existingSteps.length > 0) {
+          const lastNew = existingSteps[existingSteps.length - 1];
+          const isSamePage = isSamePageUrl(lastNew.tabUrl || lastNew.pageUrl, tabUrl);
+
+          if (isSamePage && lastNew.markers && lastNew.markers.length < 10) {
+            const newMarkerNum = lastNew.markers.length + 1;
+            lastNew.markers.push({
+              x: clickData.x, y: clickData.y, number: newMarkerNum,
+              elementRect: clickData.elementRect,
+              element: clickData.element,
+              description: autoDesc
+            });
+
+            // 원본 스크린샷 위에 모든 마커 다시 그리기
+            const markedDataUrl = await addMultipleMarkers(
+              dataUrl, lastNew.markers, clickData.viewport
+            );
+            lastNew.screenshot = dataUrl;
+            lastNew.screenshotWithMarker = markedDataUrl;
+            lastNew.description = lastNew.markers
+              .map((m, i) => `${i + 1}. ${m.description || ''}`)
+              .filter(d => d.length > 3)
+              .join('\n');
+
+            const totalSteps = existingSteps.length;
+            chrome.action.setBadgeText({ text: `RE${totalSteps}` });
+
+            chrome.runtime.sendMessage({
+              type: 'RE_RECORD_PROGRESS',
+              stepIndex: reRecordTarget.stepIndex,
+              capturedCount: totalSteps,
+              thumbnail: markedDataUrl,
+              merged: true
+            }).catch(() => {});
+
+            sendResponse({ captured: true, reRecording: true, capturedCount: totalSteps, merged: true });
+            return;
+          }
+        }
+
+        // 클릭당 1장 모드 또는 새 페이지
+        const newNum = existingSteps.length + 1;
+        const markerNumber = captureMode === 'per-page' ? 1 : newNum;
+
+        const markedDataUrl = await addClickMarker(
+          dataUrl, clickData.x, clickData.y, markerNumber,
+          clickData.viewport, clickData.elementRect
+        );
+
+        const newStep = {
+          stepNumber: newNum,
+          screenshot: dataUrl,
+          screenshotWithMarker: markedDataUrl,
+          pageUrl: clickData.pageUrl,
+          pageTitle: clickData.pageTitle,
+          tabUrl: tabUrl,
+          clickX: clickData.x,
+          clickY: clickData.y,
+          elementRect: clickData.elementRect,
+          element: clickData.element,
+          viewport: clickData.viewport,
+          description: captureMode === 'per-page'
+            ? `1. ${autoDesc}` : autoDesc,
+          timestamp: clickData.timestamp,
+          markers: [{
+            x: clickData.x, y: clickData.y, number: 1,
+            elementRect: clickData.elementRect,
+            element: clickData.element,
+            description: autoDesc
+          }],
+          modified: true,
+          modifiedAt: Date.now(),
+          changeType: 're-recorded',
+          changeSummary: `재녹화 (${newNum}장)`
+        };
+
+        existingSteps.push(newStep);
+
+        chrome.action.setBadgeText({ text: `RE${newNum}` });
+
+        chrome.runtime.sendMessage({
+          type: 'RE_RECORD_PROGRESS',
+          stepIndex: reRecordTarget.stepIndex,
+          capturedCount: newNum,
+          thumbnail: markedDataUrl
+        }).catch(() => {});
+
+        sendResponse({ captured: true, reRecording: true, capturedCount: newNum });
+        return;
+      }
+
       globalClickNumber++;
 
       if (captureMode === 'per-page' && steps.length > 0) {

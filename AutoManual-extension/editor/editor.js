@@ -68,6 +68,8 @@ const CROP_HANDLE_HIT = 20;
 
 // ── 선택 도구 상태 ──
 let selectedIndex = -1;
+let isDraggingSelected = false;
+let dragOffsetX = 0, dragOffsetY = 0;
 
 const toolHints = {
   rect: '드래그하여 사각형을 그리세요',
@@ -77,7 +79,7 @@ const toolHints = {
   numbering: '클릭하면 순서대로 번호가 매겨진 원형 마커가 배치됩니다',
   blur: '드래그하여 블러 처리할 영역을 선택하세요',
   crop: '상/하/좌/우 경계선을 드래그하여 영역 조절 → "크롭 적용" 클릭',
-  select: '마커를 클릭하여 선택 → Delete 또는 우측 삭제 버튼으로 삭제'
+  select: '마커를 클릭하여 선택 → 드래그로 이동 / Delete로 삭제'
 };
 
 // ── 초기 로드 ──
@@ -161,15 +163,29 @@ document.getElementById('undoBtn').addEventListener('click', () => {
 });
 
 // ── 키보드 단축키 ──
-document.addEventListener('keydown', (e) => {
-  if (activeTextInput) return;
+// Ctrl+Z 전용 핸들러: 최상위에서 capture 단계로 무조건 잡음
+document.addEventListener('keydown', function ctrlZHandler(e) {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+    // 인라인 텍스트 입력 중이면 무시
+    if (typeof activeTextInput !== 'undefined' && activeTextInput) return;
 
-  // Ctrl+Z = Undo
-  if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
     e.preventDefault();
-    if (!cropMode) performUndo();
-    return;
+    e.stopImmediatePropagation();
+    if (!cropMode) {
+      selectedIndex = -1;
+      performUndo();
+    }
   }
+}, true);
+
+// 나머지 단축키 (Delete, Escape 등)
+document.addEventListener('keydown', function otherKeysHandler(e) {
+  // 인라인 텍스트 입력 중이면 차단
+  if (typeof activeTextInput !== 'undefined' && activeTextInput) return;
+
+  // 입력 요소에 포커스 중이면 차단
+  const tag = document.activeElement?.tagName;
+  if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') return;
 
   // Delete/Backspace = 선택된 항목 삭제
   if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIndex >= 0 && currentTool === 'select') {
@@ -181,6 +197,15 @@ document.addEventListener('keydown', (e) => {
     render();
     renderDescList();
     return;
+  }
+
+  // Escape = 선택 해제
+  if (e.key === 'Escape') {
+    if (selectedIndex >= 0) {
+      selectedIndex = -1;
+      render();
+      renderDescList();
+    }
   }
 });
 
@@ -577,7 +602,29 @@ canvas.addEventListener('mousedown', (e) => {
   // 선택 도구
   if (currentTool === 'select') {
     const idx = hitTest(px, py);
-    selectedIndex = idx;
+    if (idx >= 0) {
+      // 이미 선택된 마커를 다시 클릭 → 드래그 시작
+      if (selectedIndex === idx) {
+        isDraggingSelected = true;
+        saveUndoState();
+        const ann = annotations[idx];
+        if (ann.type === 'numbering') {
+          dragOffsetX = px - ann.x;
+          dragOffsetY = py - ann.y;
+        } else {
+          dragOffsetX = px - ann.x;
+          dragOffsetY = py - ann.y;
+        }
+        canvas.style.cursor = 'grabbing';
+        return;
+      }
+      // 새 마커 선택
+      selectedIndex = idx;
+      canvas.style.cursor = 'grab';
+    } else {
+      selectedIndex = -1;
+      canvas.style.cursor = 'pointer';
+    }
     render();
     if (selectedIndex >= 0) drawSelection(annotations[selectedIndex]);
     renderDescList();
@@ -632,6 +679,16 @@ canvas.addEventListener('mousemove', (e) => {
     return;
   }
 
+  // 선택 도구 드래그 이동
+  if (currentTool === 'select' && isDraggingSelected && selectedIndex >= 0) {
+    const ann = annotations[selectedIndex];
+    ann.x = curX - dragOffsetX;
+    ann.y = curY - dragOffsetY;
+    render();
+    drawSelection(ann);
+    return;
+  }
+
   if (!isDrawing) return;
   render();
   if (currentTool === 'blur') {
@@ -646,6 +703,16 @@ canvas.addEventListener('mouseup', (e) => {
 
   if (cropMode) {
     if (cropDragging) { cropDragging = null; canvas.style.cursor = 'default'; renderCropOverlay(); }
+    return;
+  }
+
+  // 선택 도구 드래그 종료
+  if (currentTool === 'select' && isDraggingSelected) {
+    isDraggingSelected = false;
+    canvas.style.cursor = 'grab';
+    render();
+    if (selectedIndex >= 0) drawSelection(annotations[selectedIndex]);
+    renderDescList();
     return;
   }
 
@@ -692,6 +759,7 @@ canvas.addEventListener('mouseup', (e) => {
 canvas.addEventListener('mouseleave', () => {
   if (isDrawing) { isDrawing = false; render(); }
   if (cropMode && cropDragging) { cropDragging = null; canvas.style.cursor = 'default'; }
+  if (isDraggingSelected) { isDraggingSelected = false; canvas.style.cursor = 'pointer'; }
 });
 
 // ══════════════════════════════════════

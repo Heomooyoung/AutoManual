@@ -14,9 +14,152 @@ const exportMenu = document.getElementById('exportMenu');
 const previewBtn = document.getElementById('previewBtn');
 const modePerClick = document.getElementById('modePerClick');
 const modePerPage = document.getElementById('modePerPage');
-const modeHint = document.getElementById('modeHint');
+const modeHint = document.getElementById('modeHint'); // null if compact
 
 let isRecording = false;
+let reRecordStepIndex = null; // 재녹화 중인 단계 인덱스
+
+// ─── 매뉴얼 저장/불러오기 ───
+const saveManualBtn = document.getElementById('saveManualBtn');
+const loadManualBtn = document.getElementById('loadManualBtn');
+const manualListPanel = document.getElementById('manualListPanel');
+const manualListBody = document.getElementById('manualListBody');
+const manualListClose = document.getElementById('manualListClose');
+const reRecordBanner = document.getElementById('reRecordBanner');
+const reRecordMsg = document.getElementById('reRecordMsg');
+const reRecordCancel = document.getElementById('reRecordCancel');
+const reRecordFinish = document.getElementById('reRecordFinish');
+const reRecordThumbs = document.getElementById('reRecordThumbs');
+
+saveManualBtn.addEventListener('click', () => {
+  const title = document.getElementById('manualTitle').value || '제목 없음';
+  chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (res) => {
+    if (!res?.steps?.length) {
+      alert('저장할 단계가 없습니다.');
+      return;
+    }
+    chrome.runtime.sendMessage({ type: 'SAVE_MANUAL', title }, (response) => {
+      if (response?.success) {
+        alert(`"${title}" 매뉴얼이 저장되었습니다.`);
+      }
+    });
+  });
+});
+
+loadManualBtn.addEventListener('click', () => {
+  if (manualListPanel.style.display === 'none') {
+    manualListPanel.style.display = 'block';
+    refreshManualList();
+  } else {
+    manualListPanel.style.display = 'none';
+  }
+});
+
+manualListClose.addEventListener('click', () => {
+  manualListPanel.style.display = 'none';
+});
+
+function refreshManualList() {
+  chrome.runtime.sendMessage({ type: 'GET_MANUALS' }, (response) => {
+    const manuals = response?.manuals || [];
+    manualListBody.innerHTML = '';
+    if (manuals.length === 0) {
+      manualListBody.innerHTML = '<p class="manual-list-empty">저장된 매뉴얼이 없습니다</p>';
+      return;
+    }
+    manuals.forEach(m => {
+      const item = document.createElement('div');
+      item.className = 'manual-list-item';
+
+      const info = document.createElement('div');
+      info.className = 'manual-item-info';
+      const titleEl = document.createElement('div');
+      titleEl.className = 'manual-item-title';
+      titleEl.textContent = m.title;
+      const meta = document.createElement('div');
+      meta.className = 'manual-item-meta';
+      meta.textContent = `${new Date(m.savedAt).toLocaleString('ko-KR')} · ${m.stepCount}단계`;
+      info.appendChild(titleEl);
+      info.appendChild(meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'manual-item-actions';
+      const delBtn = document.createElement('button');
+      delBtn.className = 'manual-item-del';
+      delBtn.textContent = '🗑️';
+      delBtn.title = '삭제';
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!confirm(`"${m.title}" 매뉴얼을 삭제하시겠습니까?`)) return;
+        chrome.runtime.sendMessage({ type: 'DELETE_MANUAL', manualId: m.id }, () => {
+          refreshManualList();
+        });
+      });
+      actions.appendChild(delBtn);
+
+      item.appendChild(info);
+      item.appendChild(actions);
+      item.addEventListener('click', () => loadManual(m.id));
+      manualListBody.appendChild(item);
+    });
+  });
+}
+
+function loadManual(manualId) {
+  if (!confirm('현재 작업을 대체하고 저장된 매뉴얼을 불러오시겠습니까?')) return;
+  chrome.runtime.sendMessage({ type: 'LOAD_MANUAL', manualId }, (response) => {
+    if (response?.success) {
+      document.getElementById('manualTitle').value = response.title || '';
+      manualListPanel.style.display = 'none';
+      refreshStepList(response.steps);
+    } else {
+      alert(response?.error || '불러오기 실패');
+    }
+  });
+}
+
+// ─── 재녹화 컨트롤 ───
+reRecordCancel.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'CANCEL_RE_RECORD' }, () => {
+    reRecordStepIndex = null;
+    reRecordBanner.style.display = 'none';
+    reRecordFinish.style.display = 'none';
+    reRecordThumbs.innerHTML = '';
+  });
+});
+
+reRecordFinish.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'FINISH_RE_RECORD' }, (response) => {
+    reRecordStepIndex = null;
+    reRecordBanner.style.display = 'none';
+    reRecordFinish.style.display = 'none';
+    reRecordThumbs.innerHTML = '';
+    if (response?.success) {
+      refreshStepList(response.steps);
+    } else {
+      alert(response?.error || '재녹화 완료 실패');
+    }
+  });
+});
+
+function startReRecord(stepIndex) {
+  if (isRecording) {
+    alert('녹화 중에는 재녹화를 시작할 수 없습니다.');
+    return;
+  }
+  const titleVal = document.getElementById('manualTitle').value.trim();
+  if (!titleVal) {
+    alert('매뉴얼 제목을 입력해주세요.');
+    document.getElementById('manualTitle').focus();
+    return;
+  }
+  reRecordStepIndex = stepIndex;
+  reRecordMsg.textContent = `Step ${stepIndex + 1} 재녹화 중`;
+  reRecordBanner.style.display = 'block';
+  reRecordFinish.style.display = 'none';
+  reRecordThumbs.innerHTML = '';
+  chrome.runtime.sendMessage({ type: 'START_RE_RECORD', stepIndex });
+}
 
 // ─── 사용법 팝업 ───
 const helpBtn = document.getElementById('helpBtn');
@@ -47,7 +190,7 @@ modePerPage.addEventListener('click', () => setMode('per-page'));
 function setMode(mode) {
   modePerClick.classList.toggle('active', mode === 'per-click');
   modePerPage.classList.toggle('active', mode === 'per-page');
-  modeHint.textContent = modeHints[mode];
+  if (modeHint) modeHint.textContent = modeHints[mode];
   chrome.runtime.sendMessage({ type: 'SET_CAPTURE_MODE', mode });
 }
 
@@ -67,6 +210,14 @@ chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
 // sidepanel에서는 UI만 업데이트
 recordBtn.addEventListener('click', () => {
   if (!isRecording) {
+    const titleVal = document.getElementById('manualTitle').value.trim();
+    if (!titleVal) {
+      alert('매뉴얼 제목을 입력해주세요.');
+      document.getElementById('manualTitle').focus();
+      return;
+    }
+    // 캡처 모드를 클릭당 1장으로 리셋
+    setMode('per-click');
     chrome.runtime.sendMessage({ type: 'START_RECORDING' }, (response) => {
       if (response?.success) {
         isRecording = true;
@@ -108,6 +259,46 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'EDITOR_SAVED') {
     refreshStepListFromBg();
   }
+  // 재녹화 진행 (캡처 추가될 때마다)
+  if (message.type === 'RE_RECORD_PROGRESS') {
+    reRecordMsg.textContent = `Step ${message.stepIndex + 1} 재녹화 중 — ${message.capturedCount}장 캡처됨`;
+    reRecordFinish.style.display = 'inline-block';
+
+    if (message.thumbnail) {
+      if (message.merged) {
+        // 화면당 1장: 마지막 썸네일 업데이트
+        const lastThumb = reRecordThumbs.querySelector('.re-record-thumb-label:last-child img');
+        if (lastThumb) {
+          lastThumb.src = message.thumbnail;
+        }
+      } else {
+        // 새 장 추가
+        const thumbWrap = document.createElement('div');
+        thumbWrap.className = 're-record-thumb-label';
+        const img = document.createElement('img');
+        img.className = 're-record-thumb';
+        img.src = message.thumbnail;
+        img.alt = `캡처 ${message.capturedCount}`;
+        const label = document.createElement('span');
+        label.className = 're-record-thumb-num';
+        label.textContent = `${message.capturedCount}장`;
+        thumbWrap.appendChild(img);
+        thumbWrap.appendChild(label);
+        reRecordThumbs.appendChild(thumbWrap);
+      }
+    }
+  }
+  // 재녹화 완료 (FINISH_RE_RECORD 응답으로도 처리됨, 이건 broadcast 수신용)
+  if (message.type === 'RE_RECORD_DONE') {
+    reRecordStepIndex = null;
+    reRecordBanner.style.display = 'none';
+    reRecordFinish.style.display = 'none';
+    if (message.steps) {
+      refreshStepList(message.steps);
+    } else {
+      refreshStepListFromBg();
+    }
+  }
 });
 
 // ─── 단계 목록 관리 ───
@@ -129,175 +320,142 @@ function loadSteps() {
   });
 }
 
+// ─── 드래그 앤 드롭 상태 ───
+let dragSrcIndex = null;
+let lastMovedIndex = null; // 위/아래 버튼으로 이동한 카드 하이라이트용
+
 function addStepCard(step) {
   emptyState.style.display = 'none';
   bottomBar.style.display = 'flex';
 
   const stepIndex = step.stepNumber - 1;
   const card = document.createElement('div');
-  card.className = 'step-card';
+  card.className = 'step-thumb-card' + (step.modified ? ' step-thumb-modified' : '');
+  if (lastMovedIndex === stepIndex) card.classList.add('step-thumb-moving');
   card.dataset.index = stepIndex;
+  card.draggable = true;
 
-  // ── 헤더 ──
-  const header = document.createElement('div');
-  header.className = 'step-card-header';
-
-  const numSpan = document.createElement('span');
-  numSpan.className = 'step-number';
-  numSpan.textContent = `Step ${step.stepNumber}`;
-
-  const metaSpan = document.createElement('span');
-  metaSpan.className = 'step-meta';
-  metaSpan.title = step.pageTitle || '';
-  metaSpan.textContent = step.pageTitle || step.pageUrl || '';
-
-  const actions = document.createElement('div');
-  actions.className = 'step-actions';
-
-  // 편집기 열기
-  const editBtn = document.createElement('button');
-  editBtn.textContent = '✏️';
-  editBtn.title = '편집기 열기';
-  editBtn.addEventListener('click', () => {
-    const editorUrl = chrome.runtime.getURL('editor/editor.html') + '?step=' + stepIndex;
-    chrome.tabs.create({ url: editorUrl });
+  // ── 드래그 이벤트 ──
+  card.addEventListener('dragstart', (e) => {
+    dragSrcIndex = stepIndex;
+    card.classList.add('step-thumb-dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', stepIndex);
   });
-  actions.appendChild(editBtn);
 
-  const upBtn = document.createElement('button');
-  upBtn.textContent = '⬆️';
-  upBtn.title = '위로 이동';
-  upBtn.addEventListener('click', () => moveStep(stepIndex, stepIndex - 1));
-  actions.appendChild(upBtn);
+  card.addEventListener('dragend', () => {
+    card.classList.remove('step-thumb-dragging');
+    stepList.querySelectorAll('.step-thumb-card').forEach(c => c.classList.remove('step-thumb-dragover'));
+    dragSrcIndex = null;
+  });
 
-  const downBtn = document.createElement('button');
-  downBtn.textContent = '⬇️';
-  downBtn.title = '아래로 이동';
-  downBtn.addEventListener('click', () => moveStep(stepIndex, stepIndex + 1));
-  actions.appendChild(downBtn);
-
-  const deleteBtn = document.createElement('button');
-  deleteBtn.textContent = '🗑️';
-  deleteBtn.title = '이 단계 삭제';
-  deleteBtn.addEventListener('click', () => deleteStep(stepIndex));
-  actions.appendChild(deleteBtn);
-
-  header.appendChild(numSpan);
-  header.appendChild(metaSpan);
-  header.appendChild(actions);
-
-  // ── 스크린샷 (클릭하면 풀스크린 보기) ──
-  const imgWrap = document.createElement('div');
-  imgWrap.className = 'step-screenshot-wrap';
-
-  const img = document.createElement('img');
-  img.className = 'step-screenshot';
-  img.src = step.screenshotWithMarker;
-  img.alt = `Step ${step.stepNumber}`;
-  img.addEventListener('click', () => openImageFullscreen(step.screenshotWithMarker));
-
-  const editHint = document.createElement('div');
-  editHint.className = 'step-add-hint';
-  editHint.textContent = '✏️ 편집은 연필 버튼 클릭';
-
-  imgWrap.appendChild(img);
-  imgWrap.appendChild(editHint);
-
-  // ── 마커별 설명 목록 ──
-  const markersDiv = document.createElement('div');
-  markersDiv.className = 'step-markers-list';
-
-  // 마커가 없거나 배열이 아니면 step 정보로 기본 마커 생성
-  let markers = Array.isArray(step.markers) && step.markers.length > 0
-    ? step.markers
-    : [{
-        number: 1,
-        element: step.element || { tag: '', text: '' },
-        description: step.description || step.element?.autoDescription || ''
-      }];
-
-  // 각 마커의 description이 비어있으면 step.description에서 추출 시도
-  markers.forEach((m, i) => {
-    if (!m.description && step.description) {
-      // "1. 설명\n2. 설명" 형식에서 해당 번호의 설명 추출
-      const lines = step.description.split('\n');
-      const prefix = `${i + 1}. `;
-      const matched = lines.find(l => l.startsWith(prefix));
-      if (matched) {
-        m.description = matched.substring(prefix.length);
-      } else if (markers.length === 1) {
-        m.description = step.description;
-      }
+  card.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragSrcIndex !== null && dragSrcIndex !== stepIndex) {
+      card.classList.add('step-thumb-dragover');
     }
   });
 
-  {
-    markers.forEach((marker, mi) => {
-      const row = document.createElement('div');
-      row.className = 'marker-row';
+  card.addEventListener('dragleave', () => {
+    card.classList.remove('step-thumb-dragover');
+  });
 
-      // 번호 배지
-      const badge = document.createElement('span');
-      badge.className = 'marker-badge';
-      badge.textContent = marker.number || (mi + 1);
+  card.addEventListener('drop', (e) => {
+    e.preventDefault();
+    card.classList.remove('step-thumb-dragover');
+    const fromIndex = dragSrcIndex;
+    if (fromIndex !== null && fromIndex !== stepIndex) {
+      lastMovedIndex = null;
+      moveStep(fromIndex, stepIndex);
+    }
+  });
 
-      // 요소 정보
-      const elInfo = document.createElement('span');
-      elInfo.className = 'marker-el-info';
-      const mText = marker.element?.text ? `"${marker.element.text}"` : '';
-      const mTag = (marker.element?.tag || '').toLowerCase();
-      elInfo.textContent = mText || mTag || '';
+  // ── 썸네일 이미지 ──
+  const img = document.createElement('img');
+  img.className = 'step-thumb-img';
+  img.src = step.screenshotWithMarker;
+  img.alt = `Step ${step.stepNumber}`;
+  img.draggable = false; // 이미지 자체 드래그 방지
+  img.addEventListener('click', () => openImageFullscreen(step.screenshotWithMarker));
 
-      // 삭제 버튼
-      const delBtn = document.createElement('button');
-      delBtn.className = 'marker-del-btn';
-      delBtn.textContent = '✕';
-      delBtn.title = '이 마커 삭제';
-      delBtn.addEventListener('click', () => {
-        chrome.runtime.sendMessage({
-          type: 'DELETE_MARKER',
-          stepIndex: stepIndex,
-          markerIndex: mi
-        }, (response) => {
-          if (response?.success) refreshStepListFromBg();
-        });
-      });
+  // ── 오버레이: Step 번호 ──
+  const numBadge = document.createElement('span');
+  numBadge.className = 'step-thumb-num';
+  numBadge.textContent = step.stepNumber;
 
-      // 헤더 행
-      const rowHeader = document.createElement('div');
-      rowHeader.className = 'marker-row-header';
-      rowHeader.appendChild(badge);
-      rowHeader.appendChild(elInfo);
-      rowHeader.appendChild(delBtn);
-
-      // 설명 입력
-      const ta = document.createElement('textarea');
-      ta.className = 'marker-textarea';
-      ta.placeholder = `${mi + 1}번 마커 설명...`;
-      ta.value = marker.description || '';
-      ta.rows = 2;
-      ta.addEventListener('change', (e) => {
-        chrome.runtime.sendMessage({
-          type: 'UPDATE_MARKER_DESC',
-          stepIndex: stepIndex,
-          markerIndex: mi,
-          description: e.target.value
-        });
-      });
-
-      row.appendChild(rowHeader);
-      row.appendChild(ta);
-      markersDiv.appendChild(row);
-    });
+  // ── 수정됨 배지 ──
+  if (step.modified) {
+    const modBadge = document.createElement('span');
+    modBadge.className = 'step-thumb-mod';
+    modBadge.textContent = step.changeType === 're-recorded' ? '🔄' : '✏️';
+    card.appendChild(modBadge);
   }
 
-  // ── 카드 조립 ──
-  card.appendChild(header);
-  card.appendChild(imgWrap);
-  card.appendChild(markersDiv);
+  // ── 하단 액션 바 ──
+  const actionBar = document.createElement('div');
+  actionBar.className = 'step-thumb-actions';
+
+  const reRecBtn = document.createElement('button');
+  reRecBtn.textContent = '🔄';
+  reRecBtn.title = '재녹화';
+  reRecBtn.addEventListener('click', (e) => { e.stopPropagation(); startReRecord(stepIndex); });
+
+  const editBtn = document.createElement('button');
+  editBtn.textContent = '✏️';
+  editBtn.title = '편집기';
+  editBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const editorUrl = chrome.runtime.getURL('editor/editor.html') + '?step=' + stepIndex;
+    chrome.tabs.create({ url: editorUrl });
+  });
+
+  const upBtn = document.createElement('button');
+  upBtn.textContent = '↑';
+  upBtn.title = '위로';
+  upBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (stepIndex > 0) {
+      lastMovedIndex = stepIndex - 1;
+      moveStep(stepIndex, stepIndex - 1);
+    }
+  });
+
+  const downBtn = document.createElement('button');
+  downBtn.textContent = '↓';
+  downBtn.title = '아래로';
+  downBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    lastMovedIndex = stepIndex + 1;
+    moveStep(stepIndex, stepIndex + 1);
+  });
+
+  const delBtn = document.createElement('button');
+  delBtn.textContent = '✕';
+  delBtn.title = '삭제';
+  delBtn.className = 'step-thumb-del';
+  delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteStep(stepIndex); });
+
+  actionBar.appendChild(reRecBtn);
+  actionBar.appendChild(editBtn);
+  actionBar.appendChild(upBtn);
+  actionBar.appendChild(downBtn);
+  actionBar.appendChild(delBtn);
+
+  card.appendChild(img);
+  card.appendChild(numBadge);
+  card.appendChild(actionBar);
 
   stepList.appendChild(card);
   stepList.scrollTop = stepList.scrollHeight;
+}
+
+// 이동 하이라이트 자동 해제
+function clearMovingHighlight() {
+  setTimeout(() => {
+    lastMovedIndex = null;
+    stepList.querySelectorAll('.step-thumb-moving').forEach(c => c.classList.remove('step-thumb-moving'));
+  }, 1500);
 }
 
 // background에서 최신 데이터 가져와서 목록 새로고침
@@ -308,13 +466,13 @@ function refreshStepListFromBg() {
 }
 
 function updateStepCount() {
-  const count = stepList.querySelectorAll('.step-card').length;
+  const count = stepList.querySelectorAll('.step-thumb-card').length;
   stepCount.textContent = `${count} 단계`;
 }
 
 // ─── 전체 목록 새로고침 ───
 function refreshStepList(stepsData) {
-  stepList.querySelectorAll('.step-card').forEach((card) => card.remove());
+  stepList.querySelectorAll('.step-thumb-card').forEach((card) => card.remove());
   if (!stepsData || stepsData.length === 0) {
     emptyState.style.display = 'block';
     bottomBar.style.display = 'none';
@@ -338,7 +496,10 @@ function deleteStep(index) {
 // ─── 단계 순서 이동 ───
 function moveStep(from, to) {
   chrome.runtime.sendMessage({ type: 'MOVE_STEP', from, to }, (response) => {
-    if (response?.success) refreshStepList(response.steps);
+    if (response?.success) {
+      refreshStepList(response.steps);
+      clearMovingHighlight();
+    }
   });
 }
 
@@ -368,7 +529,9 @@ function openImageFullscreen(src) {
   document.body.appendChild(overlay);
 }
 
-// ─── 미리보기 ───
+// ─── 미리보기 (탭 재사용) ───
+let previewTabId = null;
+
 previewBtn.addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
     if (!response?.steps?.length) {
@@ -377,12 +540,36 @@ previewBtn.addEventListener('click', () => {
     }
 
     const title = document.getElementById('manualTitle').value || '매뉴얼';
-
-    // viewer 페이지에서 background.js의 데이터를 직접 가져옴 (storage 미사용)
     const viewerUrl = chrome.runtime.getURL('viewer/viewer.html')
       + '?title=' + encodeURIComponent(title);
-    chrome.tabs.create({ url: viewerUrl });
+
+    // 이미 열린 미리보기 탭이 있으면 재사용
+    if (previewTabId !== null) {
+      chrome.tabs.get(previewTabId, (tab) => {
+        if (chrome.runtime.lastError || !tab) {
+          // 탭이 닫혔으면 새로 열기
+          previewTabId = null;
+          openPreviewTab(viewerUrl);
+        } else {
+          // 기존 탭 업데이트 + 포커스
+          chrome.tabs.update(previewTabId, { url: viewerUrl, active: true });
+        }
+      });
+    } else {
+      openPreviewTab(viewerUrl);
+    }
   });
+});
+
+function openPreviewTab(url) {
+  chrome.tabs.create({ url }, (tab) => {
+    previewTabId = tab.id;
+  });
+}
+
+// 미리보기 탭이 닫히면 ID 초기화
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabId === previewTabId) previewTabId = null;
 });
 
 // ─── 내보내기 드롭다운 ───
@@ -447,6 +634,12 @@ function exportToHTML(title, steps) {
     .meta { color: #6b7b9e; font-size: 13px; margin-bottom: 32px; }
     .step { display: flex; background: #fff; border-radius: 12px; margin-bottom: 24px;
             overflow: hidden; box-shadow: 0 2px 8px rgba(27,42,74,0.08); border: 1px solid #c8d1e0; }
+    .step.modified { border: 3px solid #7c3aed; box-shadow: 0 4px 20px rgba(124,58,237,0.2); }
+    .change-banner { padding: 8px 18px; background: linear-gradient(90deg, #faf5ff, #ede9fe);
+                     border-bottom: 2px solid #7c3aed; border-left: 4px solid #7c3aed;
+                     font-size: 12px; color: #6d28d9; font-weight: 600; }
+    .mod-badge { display: inline-block; font-size: 10px; font-weight: 700; color: #fff;
+                 background: #7c3aed; padding: 2px 8px; border-radius: 8px; margin-left: 6px; }
     .step-left { flex: 7; min-width: 0; }
     .step-header { padding: 12px 18px; background: #1b2a4a;
                    display: flex; justify-content: space-between; align-items: center; }
@@ -490,13 +683,21 @@ function exportToHTML(title, steps) {
     } else {
       descHtml = `<div class="step-desc">${escapeHtml(step.description || '(설명 없음)')}</div>`;
     }
+    const modClass = step.modified ? ' modified' : '';
+    const modBadge = step.modified
+      ? `<span class="mod-badge">${step.changeType === 're-recorded' ? '재녹화됨' : '수정됨'}</span>`
+      : '';
+    const changeBanner = step.modified && step.changeSummary
+      ? `<div class="change-banner">${step.changeType === 're-recorded' ? '🔄' : '✏️'} ${escapeHtml(step.changeSummary)}${step.modifiedAt ? ' (' + new Date(step.modifiedAt).toLocaleString('ko-KR') + ')' : ''}</div>`
+      : '';
     return `
-  <div class="step">
+  <div class="step${modClass}">
     <div class="step-left">
       <div class="step-header">
-        <span class="step-num">Step ${step.stepNumber}</span>
+        <span class="step-num">Step ${step.stepNumber}${modBadge}</span>
         <span class="step-url">${escapeHtml(step.pageTitle || '')}</span>
       </div>
+      ${changeBanner}
       <img src="${step.screenshotWithMarker}" alt="Step ${step.stepNumber}">
     </div>
     <div class="step-right">
@@ -603,10 +804,25 @@ function exportToPPTX(title, steps) {
 
     // 페이지 제목
     slide.addText(step.pageTitle || '', {
-      x: 1.5, y: 0.1, w: 8.2, h: 0.35,
+      x: 1.5, y: 0.1, w: 7.0, h: 0.35,
       fontSize: 10, fontFace: FONT,
       color: NAVY.sub, align: 'left', valign: 'middle'
     });
+
+    // 수정됨 배지 (PPT)
+    if (step.modified) {
+      const modLabel = step.changeType === 're-recorded' ? '재녹화됨' : '수정됨';
+      slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
+        x: 8.6, y: 0.1, w: 1.1, h: 0.35,
+        fill: { color: '7C3AED' },
+        rectRadius: 0.05
+      });
+      slide.addText(modLabel, {
+        x: 8.6, y: 0.1, w: 1.1, h: 0.35,
+        fontSize: 9, fontFace: FONT,
+        color: NAVY.white, align: 'center', bold: true
+      });
+    }
 
     // ── 좌측: 스크린샷 영역 ──
     const imgX = 0.3;

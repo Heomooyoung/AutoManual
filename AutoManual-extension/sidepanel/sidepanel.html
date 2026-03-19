@@ -26,32 +26,36 @@
       <div class="help-body">
         <div class="help-section">
           <h3>1. 녹화</h3>
-          <p><b>녹화 시작</b> 버튼 클릭 후 웹페이지에서 원하는 곳을 클릭하면 자동으로 스크린샷이 캡처됩니다.</p>
+          <p>제목 입력 → <b>녹화 시작</b> → 웹페이지 클릭 시 자동 캡처</p>
         </div>
         <div class="help-section">
           <h3>2. 캡처 모드</h3>
-          <p><b>클릭당 1장</b> — 클릭할 때마다 새 스크린샷<br>
-             <b>화면당 1장</b> — 같은 페이지 클릭은 하나의 스크린샷에 번호 추가</p>
+          <p><b>클릭당 1장</b> — 클릭마다 새 스크린샷<br>
+             <b>화면당 1장</b> — 같은 페이지 클릭은 하나에 번호 추가</p>
         </div>
         <div class="help-section">
-          <h3>3. 편집기 도구</h3>
-          <p>각 단계의 <b>편집</b> 버튼을 클릭하면 편집기가 열립니다.</p>
+          <h3>3. 순서 변경</h3>
+          <p>썸네일을 <b>드래그</b>하여 순서 변경하거나 <b>↑↓</b> 버튼 사용</p>
+        </div>
+        <div class="help-section">
+          <h3>4. 편집기</h3>
+          <p><b>✏️</b> 버튼으로 편집기 열기</p>
           <ul>
-            <li><b>▭ 사각형 / → 화살표 / ● 원형</b> — 드래그로 그리기</li>
-            <li><b>T 텍스트</b> — 클릭 후 직접 타이핑 (Enter 확정)</li>
-            <li><b>① 넘버링</b> — 클릭하면 순번 원형 마커 배치</li>
-            <li><b>◫ 블러</b> — 드래그로 모자이크 처리</li>
-            <li><b>⬒ 크롭</b> — 상하좌우 핸들로 영역 조절</li>
-            <li><b>🖱 선택</b> — 마커 클릭 후 Delete로 삭제</li>
-            <li><b>Ctrl+Z</b> — 모든 작업 되돌리기</li>
+            <li>사각형·화살표·원형·텍스트·넘버링·블러·크롭</li>
+            <li><b>🖱 선택</b> — 클릭 선택 → 드래그 이동 / Delete 삭제</li>
+            <li><b>Ctrl+Z</b> — 되돌리기</li>
           </ul>
         </div>
         <div class="help-section">
-          <h3>4. 내보내기</h3>
-          <p>녹화 완료 후 <b>HTML / PPT / GIF</b> 형식으로 내보낼 수 있습니다.</p>
+          <h3>5. 재녹화</h3>
+          <p><b>🔄</b> 클릭 → 웹페이지 캡처(여러 장 가능) → <b>완료</b>로 확정</p>
+        </div>
+        <div class="help-section">
+          <h3>6. 저장/내보내기</h3>
+          <p><b>💾</b> 저장 / <b>📂</b> 불러오기 / <b>HTML·PPT·GIF</b> 내보내기</p>
         </div>
         <div class="help-section help-note">
-          ※ 브라우저 주소창, 확장프로그램 UI 등 크롬 자체 영역은 캡처되지 않습니다.
+          ※ 크롬 주소창·확장프로그램 UI는 캡처되지 않습니다.
         </div>
       </div>
     </div>
@@ -68,18 +72,26 @@
     >
   </div>
 
-  <!-- 캡처 모드 선택 -->
-  <div class="capture-mode-section">
-    <label class="capture-mode-label">캡처 모드</label>
-    <div class="capture-mode-options">
-      <button id="modePerClick" class="mode-btn active" data-mode="per-click">
-        📸 클릭당 1장
-      </button>
-      <button id="modePerPage" class="mode-btn" data-mode="per-page">
-        🖼️ 화면당 1장
-      </button>
+  <!-- 캡처 모드 + 저장/불러오기 (한 줄) -->
+  <div class="compact-bar">
+    <div class="compact-mode">
+      <button id="modePerClick" class="mode-btn-sm active" data-mode="per-click">클릭당1장</button>
+      <button id="modePerPage" class="mode-btn-sm" data-mode="per-page">화면당1장</button>
     </div>
-    <p class="capture-mode-hint" id="modeHint">클릭할 때마다 새 스크린샷을 캡처합니다</p>
+    <div class="compact-io">
+      <button id="saveManualBtn" class="io-btn-sm" title="저장">💾</button>
+      <button id="loadManualBtn" class="io-btn-sm" title="불러오기">📂</button>
+    </div>
+  </div>
+  <!-- 저장된 매뉴얼 목록 (토글) -->
+  <div id="manualListPanel" class="manual-list-panel" style="display:none;">
+    <div class="manual-list-header">
+      <span>저장된 매뉴얼</span>
+      <button id="manualListClose" class="manual-list-close">✕</button>
+    </div>
+    <div id="manualListBody" class="manual-list-body">
+      <p class="manual-list-empty">저장된 매뉴얼이 없습니다</p>
+    </div>
   </div>
 
   <!-- 녹화 컨트롤 -->
@@ -89,6 +101,20 @@
       <span id="recordBtnText">녹화 시작</span>
     </button>
     <span id="stepCount" class="step-count">0 단계</span>
+  </div>
+
+  <!-- 재녹화 안내 패널 -->
+  <div id="reRecordBanner" class="re-record-panel" style="display:none;">
+    <div class="re-record-header">
+      <span class="re-record-icon">🔄</span>
+      <span id="reRecordMsg">Step ? 재녹화 중</span>
+    </div>
+    <p class="re-record-hint">웹페이지에서 클릭하면 캡처됩니다. 여러 장 캡처 가능합니다.</p>
+    <div id="reRecordThumbs" class="re-record-thumbs"></div>
+    <div class="re-record-btns">
+      <button id="reRecordFinish" class="re-record-finish" style="display:none;">✔ 재녹화 완료</button>
+      <button id="reRecordCancel" class="re-record-cancel">✕ 취소</button>
+    </div>
   </div>
 
   <!-- 단계 목록 -->
