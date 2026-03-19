@@ -18,6 +18,23 @@ const modeHint = document.getElementById('modeHint');
 
 let isRecording = false;
 
+// ─── 사용법 팝업 ───
+const helpBtn = document.getElementById('helpBtn');
+const helpOverlay = document.getElementById('helpOverlay');
+const helpCloseBtn = document.getElementById('helpCloseBtn');
+
+helpBtn.addEventListener('click', () => {
+  helpOverlay.style.display = 'flex';
+});
+
+helpCloseBtn.addEventListener('click', () => {
+  helpOverlay.style.display = 'none';
+});
+
+helpOverlay.addEventListener('click', (e) => {
+  if (e.target === helpOverlay) helpOverlay.style.display = 'none';
+});
+
 // ─── 캡처 모드 전환 ───
 const modeHints = {
   'per-click': '클릭할 때마다 새 스크린샷을 캡처합니다',
