@@ -101,15 +101,42 @@ chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
 
     if (step.markers?.length) {
       step.markers.forEach((m, i) => {
+        const tag = m.element?.tag || '';
         const eRect = m.elementRect;
-        if (eRect && eRect.width > 0) {
+
+        if (tag === 'text') {
+          // 텍스트 복원
           annotations.push({
-            type: m.element?.tag === 'arrow' ? 'arrow' : (m.element?.tag === 'circle' ? 'circle' : 'rect'),
+            type: 'text',
+            x: m.x * imgScale,
+            y: m.y * imgScale,
+            w: 0, h: 0,
+            text: m.element?.text || m.description || '',
+            fontSize: m.fontSize || 20,
+            color: m.color || '#e63232',
+            number: i + 1,
+            description: m.description || m.element?.text || ''
+          });
+        } else if (tag === 'numbering') {
+          // 넘버링 복원
+          annotations.push({
+            type: 'numbering',
+            x: m.x * imgScale,
+            y: m.y * imgScale,
+            w: 0, h: 0,
+            number: i + 1,
+            description: m.description || ''
+          });
+        } else if (eRect && eRect.width > 0) {
+          // rect, circle, arrow 복원
+          annotations.push({
+            type: tag === 'arrow' ? 'arrow' : (tag === 'circle' ? 'circle' : 'rect'),
             x: eRect.x * imgScale, y: eRect.y * imgScale,
             w: eRect.width * imgScale, h: eRect.height * imgScale,
             number: i + 1, description: m.description || ''
           });
         } else {
+          // 폴백: 원형
           annotations.push({
             type: 'circle',
             x: (m.x * imgScale) - 20, y: (m.y * imgScale) - 20,
@@ -1004,19 +1031,27 @@ document.getElementById('saveBtn').addEventListener('click', () => {
 
   const invScale = 1 / imgScale;
 
-  const markers = annotations.map((ann, i) => ({
-    x: (ann.x + (ann.w||0)/2) * invScale,
-    y: (ann.y + (ann.h||0)/2) * invScale,
-    number: i + 1,
-    elementRect: (ann.type !== 'arrow') ? {
-      x: Math.min(ann.x, ann.x + (ann.w||0)) * invScale,
-      y: Math.min(ann.y, ann.y + (ann.h||0)) * invScale,
-      width: Math.abs(ann.w||0) * invScale,
-      height: Math.abs(ann.h||0) * invScale
-    } : null,
-    element: { tag: ann.type, text: ann.text || '' },
-    description: ann.description || (ann.type === 'text' ? ann.text : '')
-  }));
+  const markers = annotations.map((ann, i) => {
+    const marker = {
+      x: ann.type === 'numbering' ? ann.x * invScale : (ann.x + (ann.w||0)/2) * invScale,
+      y: ann.type === 'numbering' ? ann.y * invScale : (ann.y + (ann.h||0)/2) * invScale,
+      number: i + 1,
+      elementRect: (ann.type !== 'arrow' && ann.type !== 'text' && ann.type !== 'numbering') ? {
+        x: Math.min(ann.x, ann.x + (ann.w||0)) * invScale,
+        y: Math.min(ann.y, ann.y + (ann.h||0)) * invScale,
+        width: Math.abs(ann.w||0) * invScale,
+        height: Math.abs(ann.h||0) * invScale
+      } : null,
+      element: { tag: ann.type, text: ann.text || '' },
+      description: ann.description || (ann.type === 'text' ? ann.text : '')
+    };
+    // 텍스트 고유 속성 보존
+    if (ann.type === 'text') {
+      marker.fontSize = ann.fontSize || 20;
+      marker.color = ann.color || '#e63232';
+    }
+    return marker;
+  });
 
   render();
   const markedDataUrl = canvas.toDataURL('image/jpeg', 0.85);

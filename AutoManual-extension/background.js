@@ -89,6 +89,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'UPDATE_DESCRIPTION') {
     if (steps[message.index]) {
       steps[message.index].description = message.description;
+      persistSteps();
     }
     sendResponse({ success: true });
     return true;
@@ -104,6 +105,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .map((m, i) => `${i + 1}. ${m.description || ''}`)
         .filter(d => d.length > 3)
         .join('\n');
+      persistSteps();
     }
     sendResponse({ success: true });
     return true;

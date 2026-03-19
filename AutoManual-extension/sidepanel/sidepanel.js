@@ -1175,6 +1175,7 @@ function exportToGIF(title, steps) {
       // 스크린샷
       await new Promise((resolve) => {
         const img = new Image();
+        img.onerror = () => resolve(); // 로드 실패 시 스킵
         img.onload = () => {
           // 비율 유지하여 중앙 배치
           const maxW = WIDTH - 20;
