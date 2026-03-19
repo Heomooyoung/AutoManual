@@ -725,88 +725,173 @@ function exportToHTML(title, steps) {
 
 // ─── PDF 내보내기 (인쇄 다이얼로그) ───
 function exportToPDF(title, steps) {
-  const html = `<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<title>${escapeHtml(title)}</title>
-<style>
-  @page { size: A4; margin: 15mm; }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: 'Malgun Gothic', -apple-system, sans-serif;
-    color: #1a1a2e; font-size: 12px; line-height: 1.5;
+  if (typeof jspdf === 'undefined') {
+    alert('PDF 라이브러리를 불러오지 못했습니다.');
+    return;
   }
-  .cover { text-align: center; padding: 80px 20px; page-break-after: always; }
-  .cover h1 { font-size: 32px; color: #1b2a4a; margin-bottom: 12px; }
-  .cover .meta { color: #6b7b9e; font-size: 14px; }
-  .step { page-break-inside: avoid; margin-bottom: 20px; border: 1px solid #c8d1e0; border-radius: 8px; overflow: hidden; }
-  .step.modified { border: 2px solid #7c3aed; }
-  .step-header { padding: 8px 14px; background: #1b2a4a; display: flex; justify-content: space-between; align-items: center; }
-  .step-num { font-weight: 700; color: #fff; font-size: 12px; background: #4a90d9; padding: 2px 10px; border-radius: 4px; }
-  .step-url { font-size: 10px; color: #6b7b9e; }
-  .mod-badge { font-size: 9px; font-weight: 700; color: #fff; background: #7c3aed; padding: 1px 6px; border-radius: 6px; margin-left: 6px; }
-  .change-banner { padding: 5px 14px; background: #faf5ff; border-bottom: 1px solid #ddd6fe; font-size: 10px; color: #6d28d9; font-weight: 600; }
-  .step-body { display: flex; }
-  .step-img { flex: 7; min-width: 0; }
-  .step-img img { width: 100%; display: block; }
-  .step-desc { flex: 3; min-width: 150px; max-width: 280px; background: #f4f6fa; border-left: 1px solid #c8d1e0; }
-  .step-desc-header { padding: 8px 12px; background: #2c3e6b; font-size: 11px; font-weight: 700; color: #fff; text-align: center; }
-  .marker-row { display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #e8ecf4; }
-  .marker-row:last-child { border-bottom: none; }
-  .marker-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; border-radius: 50%; background: #e63232; color: #fff; font-size: 10px; font-weight: 700; flex-shrink: 0; }
-  .marker-text { font-size: 11px; line-height: 1.5; }
-  .footer { text-align: center; color: #6b7b9e; font-size: 10px; margin-top: 30px; padding: 16px; }
-  @media print {
-    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .step { break-inside: avoid; }
-  }
-</style>
-</head>
-<body>
-<div class="cover">
-  <h1>${escapeHtml(title)}</h1>
-  <div class="meta">작성일: ${new Date().toLocaleDateString('ko-KR')} | 총 ${steps.length}단계</div>
-</div>
-${steps.map(step => {
-  const markers = step.markers || [];
-  const modClass = step.modified ? ' modified' : '';
-  const modBadge = step.modified ? `<span class="mod-badge">${step.changeType === 're-recorded' ? '재녹화됨' : '수정됨'}</span>` : '';
-  const changeBanner = step.modified && step.changeSummary
-    ? `<div class="change-banner">${step.changeType === 're-recorded' ? '🔄' : '✏️'} ${escapeHtml(step.changeSummary)}</div>` : '';
-  let descHtml;
-  if (markers.length > 0) {
-    descHtml = markers.map((m, i) =>
-      `<div class="marker-row"><span class="marker-badge">${i + 1}</span><span class="marker-text">${escapeHtml(m.description || '(설명 없음)')}</span></div>`
-    ).join('');
-  } else {
-    descHtml = `<div style="padding:12px;font-size:11px">${escapeHtml(step.description || '(설명 없음)')}</div>`;
-  }
-  return `<div class="step${modClass}">
-  <div class="step-header">
-    <span class="step-num">Step ${step.stepNumber}${modBadge}</span>
-    <span class="step-url">${escapeHtml(step.pageTitle || '')}</span>
-  </div>
-  ${changeBanner}
-  <div class="step-body">
-    <div class="step-img"><img src="${step.screenshotWithMarker}" alt="Step ${step.stepNumber}"></div>
-    <div class="step-desc">
-      <div class="step-desc-header">설명</div>
-      ${descHtml}
-    </div>
-  </div>
-</div>`;
-}).join('\n')}
-<div class="footer">DX-AutoManual로 생성됨</div>
-<script>window.onload = function() { window.print(); }<\/script>
-</body>
-</html>`;
 
-  // 새 탭에서 열어서 인쇄 다이얼로그 → PDF로 저장
-  const blob = new Blob([html], { type: 'text/html; charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  chrome.tabs.create({ url }, (tab) => {
-    // blob URL은 탭이 닫히면 자동 해제됨
+  const statusEl = document.createElement('div');
+  statusEl.style.cssText = 'position:fixed;top:0;left:0;right:0;padding:12px;background:#1b2a4a;color:#fff;text-align:center;font-size:14px;z-index:99999;font-family:inherit;';
+  statusEl.textContent = 'PDF 생성 중...';
+  document.body.appendChild(statusEl);
+
+  const { jsPDF } = jspdf;
+  // 가로(landscape) A4: 297 x 210 mm
+  const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const PW = 297, PH = 210;
+  const M = 10; // 마진
+
+  // === 표지 ===
+  pdf.setFillColor(27, 42, 74);
+  pdf.rect(0, 0, PW, PH, 'F');
+  // 상단 장식선
+  pdf.setFillColor(74, 144, 217);
+  pdf.rect(0, 0, PW, 2, 'F');
+  // 제목
+  pdf.setTextColor(255, 255, 255);
+  pdf.setFontSize(28);
+  pdf.text(title, PW / 2, PH * 0.4, { align: 'center' });
+  // 구분선
+  pdf.setFillColor(74, 144, 217);
+  pdf.rect(PW / 2 - 30, PH * 0.47, 60, 1, 'F');
+  // 메타
+  pdf.setFontSize(12);
+  pdf.setTextColor(107, 123, 158);
+  pdf.text(`${new Date().toLocaleDateString('ko-KR')}  |  ${steps.length} steps`, PW / 2, PH * 0.55, { align: 'center' });
+  // 브랜딩
+  pdf.setFontSize(9);
+  pdf.setTextColor(74, 85, 104);
+  pdf.text('DX-AutoManual', PW / 2, PH * 0.85, { align: 'center' });
+
+  // === 각 단계 (1 step = 1 page) ===
+  let loaded = 0;
+
+  const addStepPages = async () => {
+    for (let si = 0; si < steps.length; si++) {
+      const step = steps[si];
+      pdf.addPage('a4', 'landscape');
+
+      // 배경
+      pdf.setFillColor(232, 236, 244);
+      pdf.rect(0, 0, PW, PH, 'F');
+
+      // 상단 헤더 바
+      pdf.setFillColor(27, 42, 74);
+      pdf.rect(0, 0, PW, 14, 'F');
+
+      // Step 번호 배지
+      pdf.setFillColor(74, 144, 217);
+      pdf.roundedRect(M, 3, 24, 8, 1.5, 1.5, 'F');
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(9);
+      pdf.text(`Step ${step.stepNumber}`, M + 12, 8.2, { align: 'center' });
+
+      // 수정 배지
+      if (step.modified) {
+        const modLabel = step.changeType === 're-recorded' ? 'Re-recorded' : 'Edited';
+        pdf.setFillColor(124, 58, 237);
+        pdf.roundedRect(PW - M - 22, 3, 22, 8, 1.5, 1.5, 'F');
+        pdf.setTextColor(255, 255, 255);
+        pdf.setFontSize(7);
+        pdf.text(modLabel, PW - M - 11, 8.2, { align: 'center' });
+      }
+
+      // 페이지 제목
+      pdf.setTextColor(107, 123, 158);
+      pdf.setFontSize(8);
+      const pageTitle = (step.pageTitle || '').substring(0, 80);
+      pdf.text(pageTitle, M + 28, 8.2);
+
+      // 스크린샷 이미지 로드
+      const imgData = step.screenshotWithMarker;
+      if (imgData) {
+        try {
+          // 좌측: 스크린샷 영역
+          const imgX = M;
+          const imgY = 18;
+          const imgAreaW = PW * 0.68 - M;
+          const imgAreaH = PH - 24;
+
+          // 흰색 카드 배경
+          pdf.setFillColor(255, 255, 255);
+          pdf.roundedRect(imgX, imgY, imgAreaW, imgAreaH, 2, 2, 'F');
+
+          // 이미지 (비율 유지)
+          const imgPad = 2;
+          pdf.addImage(imgData, 'JPEG',
+            imgX + imgPad, imgY + imgPad,
+            imgAreaW - imgPad * 2, imgAreaH - imgPad * 2,
+            undefined, 'FAST');
+        } catch (e) {
+          console.error('PDF 이미지 추가 실패:', e);
+        }
+      }
+
+      // 우측: 설명 패널
+      const panelX = PW * 0.68 + 4;
+      const panelY = 18;
+      const panelW = PW - panelX - M;
+      const panelH = PH - 24;
+
+      // 패널 배경
+      pdf.setFillColor(255, 255, 255);
+      pdf.roundedRect(panelX, panelY, panelW, panelH, 2, 2, 'F');
+
+      // 패널 헤더
+      pdf.setFillColor(44, 62, 107);
+      pdf.roundedRect(panelX, panelY, panelW, 10, 2, 2, 'F');
+      pdf.setFillColor(44, 62, 107);
+      pdf.rect(panelX, panelY + 6, panelW, 4, 'F');
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(9);
+      pdf.text('Description', panelX + panelW / 2, panelY + 6.5, { align: 'center' });
+
+      // 마커별 설명
+      const markers = step.markers || [];
+      let textY = panelY + 14;
+      pdf.setFontSize(8);
+
+      if (markers.length > 0) {
+        const maxRows = Math.min(markers.length, 12);
+        const rowH = Math.min(14, (panelH - 16) / maxRows);
+
+        for (let mi = 0; mi < maxRows; mi++) {
+          const m = markers[mi];
+          const ry = textY + mi * rowH;
+
+          // 번호 원
+          pdf.setFillColor(230, 50, 50);
+          pdf.circle(panelX + 6, ry + 2, 3, 'F');
+          pdf.setTextColor(255, 255, 255);
+          pdf.setFontSize(7);
+          pdf.text(String(mi + 1), panelX + 6, ry + 3, { align: 'center' });
+
+          // 설명 텍스트
+          pdf.setTextColor(26, 26, 46);
+          pdf.setFontSize(8);
+          const desc = (m.description || '').substring(0, 50);
+          pdf.text(desc, panelX + 12, ry + 3);
+        }
+      } else {
+        pdf.setTextColor(107, 123, 158);
+        pdf.setFontSize(8);
+        const desc = (step.description || '(No description)').substring(0, 100);
+        pdf.text(desc, panelX + 4, textY + 3, { maxWidth: panelW - 8 });
+      }
+
+      loaded++;
+      statusEl.textContent = `PDF 생성 중... ${loaded}/${steps.length}`;
+    }
+
+    // 다운로드
+    pdf.save(`${title}.pdf`);
+    statusEl.remove();
+  };
+
+  addStepPages().catch((err) => {
+    statusEl.remove();
+    console.error('PDF 생성 실패:', err);
+    alert('PDF 생성에 실패했습니다: ' + err.message);
   });
 }
 
