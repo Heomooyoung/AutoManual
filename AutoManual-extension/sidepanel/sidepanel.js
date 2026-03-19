@@ -14,7 +14,7 @@ const exportMenu = document.getElementById('exportMenu');
 const previewBtn = document.getElementById('previewBtn');
 const modePerClick = document.getElementById('modePerClick');
 const modePerPage = document.getElementById('modePerPage');
-const modeHint = document.getElementById('modeHint'); // null if compact
+// modeHint는 compact UI에서 제거됨
 
 let isRecording = false;
 let reRecordStepIndex = null; // 재녹화 중인 단계 인덱스
@@ -190,7 +190,7 @@ modePerPage.addEventListener('click', () => setMode('per-page'));
 function setMode(mode) {
   modePerClick.classList.toggle('active', mode === 'per-click');
   modePerPage.classList.toggle('active', mode === 'per-page');
-  if (modeHint) modeHint.textContent = modeHints[mode];
+  // modeHint 제거됨 (compact UI)
   chrome.runtime.sendMessage({ type: 'SET_CAPTURE_MODE', mode });
 }
 

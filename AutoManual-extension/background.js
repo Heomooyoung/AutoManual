@@ -493,6 +493,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             index: steps.length - 1
           }).catch(() => {});
 
+          persistSteps();
           sendResponse({ captured: true, stepNumber: lastStep.stepNumber, merged: true });
           return;
         }
