@@ -132,14 +132,54 @@
       👁️ 미리보기
     </button>
     <div class="export-dropdown">
-      <button id="exportBtn" class="btn btn-export">
-        📥 내보내기 ▼
-      </button>
+      <div id="exportBtn" class="export-button-content">
+        <span class="export-text">Export</span>
+        <svg class="export-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+      </div>
       <div class="export-menu" id="exportMenu">
-        <button data-format="html">📄 HTML</button>
-        <button data-format="pdf">📕 PDF</button>
-        <button data-format="pptx">📊 PPT</button>
-        <button data-format="gif">🎞️ GIF</button>
+        <div class="export-icons">
+          <button class="export-icon-btn html-icon" data-format="html" title="HTML">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="16 18 22 12 16 6"/>
+              <polyline points="8 6 2 12 8 18"/>
+            </svg>
+            <span>HTML</span>
+          </button>
+          <button class="export-icon-btn pdf-icon" data-format="pdf" title="PDF">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+            <span>PDF</span>
+          </button>
+          <button class="export-icon-btn ppt-icon" data-format="pptx" title="PPT">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+              <line x1="8" y1="21" x2="16" y2="21"/>
+              <line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+            <span>PPT</span>
+          </button>
+          <button class="export-icon-btn gif-icon" data-format="gif" title="GIF">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+              <line x1="7" y1="2" x2="7" y2="22"/>
+              <line x1="17" y1="2" x2="17" y2="22"/>
+              <line x1="2" y1="12" x2="22" y2="12"/>
+              <line x1="2" y1="7" x2="7" y2="7"/>
+              <line x1="2" y1="17" x2="7" y2="17"/>
+              <line x1="17" y1="7" x2="22" y2="7"/>
+              <line x1="17" y1="17" x2="22" y2="17"/>
+            </svg>
+            <span>GIF</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>

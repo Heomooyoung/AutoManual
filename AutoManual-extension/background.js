@@ -20,8 +20,19 @@ chrome.storage.local.get(['stepsData', 'captureMode'], (result) => {
   }
 });
 
-// steps 변경 시 storage에 영속화
+// steps 변경 시 storage에 영속화 (배치 처리: 연속 클릭 시 마지막 1회만 저장)
+let persistTimer = null;
 function persistSteps() {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    chrome.storage.local.set({ stepsData: steps });
+    persistTimer = null;
+  }, 500);
+}
+// 즉시 저장이 필요한 경우 (녹화 중지 등)
+function persistStepsNow() {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = null;
   chrome.storage.local.set({ stepsData: steps });
 }
 
@@ -56,7 +67,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     isRecording = false;
     chrome.action.setBadgeText({ text: '' });
     broadcastToAllTabs(false);
-    persistSteps(); // 녹화 중지 시 저장
+    persistStepsNow(); // 녹화 중지 시 즉시 저장
     sendResponse({ success: true, isRecording: false, steps: steps });
     return true;
   }
@@ -170,7 +181,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       step.modifiedAt = Date.now();
       step.changeType = 'edited';
       step.changeSummary = '편집기에서 수정되었습니다';
-      persistSteps();
+      persistStepsNow();
       sendResponse({ success: true });
     } else {
       sendResponse({ success: false });
@@ -300,7 +311,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // 전체 stepNumber 재정렬
     steps.forEach((s, i) => s.stepNumber = i + 1);
-    persistSteps();
+    persistStepsNow();
 
     reRecordTarget = null;
     isRecording = false;
@@ -674,11 +685,11 @@ async function addMultipleMarkers(dataUrl, markers, viewport) {
 
   bitmap.close();
   const resultBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 });
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.readAsDataURL(resultBlob);
-  });
+  const arrayBuffer = await resultBlob.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return 'data:image/jpeg;base64,' + btoa(binary);
 }
 
 // 모든 탭의 content script에 녹화 상태를 알려주는 함수
@@ -801,13 +812,13 @@ async function addClickMarker(dataUrl, clickX, clickY, stepNumber, viewport, ele
 
   bitmap.close();
 
-  // Canvas → dataUrl
+  // Canvas → dataUrl (FileReader 없이 직접 변환)
   const resultBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 });
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.readAsDataURL(resultBlob);
-  });
+  const arrayBuffer = await resultBlob.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return 'data:image/jpeg;base64,' + btoa(binary);
 }
 
 // 라운드 사각형 경로 그리기 헬퍼

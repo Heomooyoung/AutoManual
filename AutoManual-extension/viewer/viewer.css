@@ -1,9 +1,14 @@
+/* ========================================
+   DX-AutoManual — Viewer (iOS Light Style)
+   ======================================== */
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-  font-family: 'Malgun Gothic', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: #e8ecf4;
-  color: #1a1a2e;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  background: #f2f2f7;
+  color: #000000;
+  -webkit-font-smoothing: antialiased;
 }
 
 .viewer-container {
@@ -21,15 +26,17 @@ body {
 }
 
 .viewer-header-left h1 {
-  font-size: 24px;
+  font-size: 28px;
   font-weight: 700;
-  color: #1b2a4a;
+  color: #000000;
   margin-bottom: 4px;
+  letter-spacing: -0.4px;
 }
 
 .viewer-meta {
-  color: #6b7b9e;
-  font-size: 13px;
+  color: #8e8e93;
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .viewer-header-right {
@@ -39,10 +46,10 @@ body {
 }
 
 .viewer-btn {
-  padding: 8px 18px;
+  padding: 9px 20px;
   border: none;
-  border-radius: 8px;
-  font-size: 13px;
+  border-radius: 10px;
+  font-size: 14px;
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
@@ -59,43 +66,47 @@ body {
 .btn-save:hover { background: #2db84d; }
 
 .btn-export {
-  background: #4a90d9;
+  background: #007aff;
   color: #fff;
 }
 
-.btn-export:hover { background: #3a7bc8; }
+.btn-export:hover { background: #0066d6; }
 
 .btn-close {
-  background: #636366;
-  color: #fff;
+  background: rgba(120, 120, 128, 0.12);
+  color: #8e8e93;
 }
 
-.btn-close:hover { background: #48484a; }
+.btn-close:hover {
+  background: rgba(120, 120, 128, 0.2);
+  color: #636366;
+}
 
 .edit-badge {
-  padding: 4px 12px;
-  border-radius: 12px;
-  font-size: 11px;
-  font-weight: 700;
-  background: #f3e8ff;
-  color: #7c3aed;
-  border: 1px solid #f0c27a;
+  padding: 4px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(175, 82, 222, 0.1);
+  color: #af52de;
+  border: none;
 }
 
 /* 단계 카드: 좌측 캡처 + 우측 설명 */
 .step {
   display: flex;
   background: #ffffff;
-  border-radius: 12px;
+  border-radius: 16px;
   margin-bottom: 20px;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(27, 42, 74, 0.08);
-  border: 1px solid #c8d1e0;
-  transition: box-shadow 0.2s;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06), 0 0.5px 1px rgba(0, 0, 0, 0.04);
+  border: none;
+  transition: all 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 .step:hover {
-  box-shadow: 0 4px 16px rgba(27, 42, 74, 0.12);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
 }
 
 .step-left {
@@ -109,8 +120,9 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 16px;
-  background: #1b2a4a;
+  padding: 12px 16px;
+  background: #f9f9fb;
+  border-bottom: 0.5px solid #e5e5ea;
 }
 
 .step-header-left {
@@ -123,14 +135,15 @@ body {
   font-size: 12px;
   font-weight: 700;
   color: #ffffff;
-  background: #4a90d9;
-  padding: 3px 12px;
-  border-radius: 5px;
+  background: #007aff;
+  padding: 4px 14px;
+  border-radius: 20px;
 }
 
 .step-url {
-  font-size: 11px;
-  color: #6b7b9e;
+  font-size: 12px;
+  color: #8e8e93;
+  font-weight: 500;
 }
 
 .step-header-actions {
@@ -139,24 +152,24 @@ body {
 }
 
 .step-header-actions button {
-  background: rgba(255,255,255,0.1);
+  background: rgba(120, 120, 128, 0.08);
   border: none;
-  color: #8899bb;
+  color: #8e8e93;
   font-size: 14px;
-  padding: 4px 8px;
-  border-radius: 4px;
+  padding: 6px 10px;
+  border-radius: 8px;
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .step-header-actions button:hover {
-  background: rgba(255,255,255,0.2);
-  color: #ffffff;
+  background: rgba(120, 120, 128, 0.16);
+  color: #000000;
 }
 
 .step-header-actions .del-btn:hover {
-  background: rgba(255,80,80,0.3);
-  color: #ff6b6b;
+  background: rgba(255, 59, 48, 0.1);
+  color: #ff3b30;
 }
 
 .step-left img {
@@ -174,18 +187,19 @@ body {
   flex: 3;
   min-width: 240px;
   max-width: 360px;
-  background: #f4f6fa;
-  border-left: 1px solid #c8d1e0;
+  background: #f9f9fb;
+  border-left: 0.5px solid #e5e5ea;
   display: flex;
   flex-direction: column;
 }
 
 .step-right-header {
-  padding: 10px 14px;
-  background: #2c3e6b;
-  font-size: 12px;
+  padding: 12px 14px;
+  background: #ffffff;
+  border-bottom: 0.5px solid #e5e5ea;
+  font-size: 13px;
   font-weight: 700;
-  color: #ffffff;
+  color: #000000;
   text-align: center;
   display: flex;
   justify-content: space-between;
@@ -193,19 +207,24 @@ body {
 }
 
 .edit-tool-btn {
-  background: rgba(255,255,255,0.15);
+  background: rgba(0, 122, 255, 0.1);
   border: none;
-  color: #aabbdd;
+  color: #007aff;
   font-size: 12px;
-  padding: 3px 10px;
-  border-radius: 4px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 8px;
   cursor: pointer;
   font-family: inherit;
+  transition: all 0.15s;
 }
 
 .edit-tool-btn:hover {
-  background: rgba(255,255,255,0.25);
-  color: #fff;
+  background: rgba(0, 122, 255, 0.18);
+}
+
+.edit-tool-btn:active {
+  transform: scale(0.96);
 }
 
 /* 마커별 설명 행 */
@@ -213,8 +232,8 @@ body {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 10px 14px;
-  border-bottom: 1px solid #e8ecf4;
+  padding: 12px 14px;
+  border-bottom: 0.5px solid #e5e5ea;
 }
 
 .step-marker-row:last-child {
@@ -233,29 +252,29 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 24px;
-  height: 24px;
+  min-width: 26px;
+  height: 26px;
   border-radius: 50%;
-  background: #e63232;
+  background: #ff3b30;
   color: #ffffff;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
 }
 
 .marker-del-small {
   background: none;
-  border: 1px solid #ddd;
-  border-radius: 3px;
-  font-size: 9px;
-  color: #bbb;
-  padding: 1px 5px;
+  border: none;
+  border-radius: 4px;
+  font-size: 10px;
+  color: #c7c7cc;
+  padding: 2px 6px;
   cursor: pointer;
+  transition: all 0.15s;
 }
 
 .marker-del-small:hover {
-  border-color: #e65050;
-  color: #e65050;
-  background: #fff0f0;
+  color: #ff3b30;
+  background: rgba(255, 59, 48, 0.1);
 }
 
 .marker-content {
@@ -264,45 +283,47 @@ body {
 }
 
 .marker-el-tag {
-  font-size: 10px;
-  color: #8899aa;
+  font-size: 11px;
+  color: #8e8e93;
   margin-bottom: 4px;
+  font-weight: 500;
 }
 
 /* 편집 가능한 텍스트 영역 */
 .marker-desc-edit {
   width: 100%;
-  border: 1px solid #d0d8e8;
-  border-radius: 6px;
-  padding: 8px 10px;
-  font-size: 13px;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
   font-family: inherit;
   resize: vertical;
   min-height: 44px;
   outline: none;
-  line-height: 1.5;
+  line-height: 1.6;
   background: #ffffff;
-  transition: border-color 0.2s;
+  transition: all 0.2s;
 }
 
 .marker-desc-edit:focus {
-  border-color: #4a90d9;
-  box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.1);
+  background: #f2f2f7;
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
 }
 
 /* 읽기 전용 텍스트 */
 .step-marker-text {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.6;
-  color: #1a1a2e;
+  color: #000000;
 }
 
 .viewer-footer {
   text-align: center;
-  color: #6b7b9e;
-  font-size: 12px;
+  color: #8e8e93;
+  font-size: 13px;
   margin-top: 40px;
   padding: 24px;
+  font-weight: 500;
 }
 
 /* 풀스크린 오버레이 */
@@ -310,7 +331,9 @@ body {
   position: fixed;
   top: 0; left: 0;
   width: 100%; height: 100%;
-  background: rgba(0,0,0,0.9);
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   z-index: 999999;
   display: flex;
   align-items: center;
@@ -321,18 +344,19 @@ body {
 .fullscreen-overlay img {
   max-width: 95%;
   max-height: 95%;
-  border-radius: 8px;
+  border-radius: 12px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.4);
 }
 
 /* 수정됨 배지 */
 .step-modified-badge {
   display: inline-block;
-  font-size: 10px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
   color: #ffffff;
-  background: #7c3aed;
-  padding: 3px 10px;
-  border-radius: 10px;
+  background: #af52de;
+  padding: 3px 12px;
+  border-radius: 20px;
   margin-left: 8px;
   vertical-align: middle;
   letter-spacing: 0.3px;
@@ -346,19 +370,19 @@ body {
 
 /* 변경 요약 바 */
 .step-change-banner {
-  padding: 8px 18px;
-  background: linear-gradient(90deg, #faf5ff, #ede9fe);
-  border-bottom: 2px solid #7c3aed;
-  border-left: 4px solid #7c3aed;
-  font-size: 12px;
-  color: #6d28d9;
+  padding: 10px 18px;
+  background: rgba(175, 82, 222, 0.08);
+  border-bottom: none;
+  border-left: 4px solid #af52de;
+  font-size: 13px;
+  color: #af52de;
   font-weight: 600;
 }
 
 /* 수정된 단계 카드 하이라이트 */
 .step.step-modified {
-  border: 3px solid #7c3aed;
-  box-shadow: 0 4px 20px rgba(124, 58, 237, 0.25);
+  outline: 2.5px solid #af52de;
+  box-shadow: 0 4px 20px rgba(175, 82, 222, 0.15);
   position: relative;
 }
 
@@ -372,13 +396,14 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 24px;
-  background: #f3e8ff;
-  border-bottom: 2px solid #7c3aed;
-  color: #7c3aed;
-  font-size: 14px;
+  padding: 14px 24px;
+  background: #ffffff;
+  border-bottom: none;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  color: #af52de;
+  font-size: 15px;
   font-weight: 600;
-  font-family: 'Malgun Gothic', sans-serif;
+  font-family: inherit;
 }
 
 .viewer-re-record-btns {
@@ -387,36 +412,41 @@ body {
 }
 
 .viewer-re-record-finish {
-  padding: 6px 16px;
+  padding: 8px 18px;
   border: none;
-  border-radius: 6px;
+  border-radius: 10px;
   background: #34c759;
   color: #fff;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   font-family: inherit;
+  transition: all 0.15s;
 }
 
 .viewer-re-record-finish:hover {
   background: #2db84d;
 }
 
+.viewer-re-record-finish:active {
+  transform: scale(0.97);
+}
+
 .viewer-re-record-cancel {
-  padding: 6px 16px;
-  border: 1px solid #7c3aed;
-  border-radius: 6px;
-  background: #fff;
-  color: #7c3aed;
-  font-size: 13px;
+  padding: 8px 18px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(120, 120, 128, 0.12);
+  color: #8e8e93;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   font-family: inherit;
+  transition: all 0.15s;
 }
 
 .viewer-re-record-cancel:hover {
-  background: #7c3aed;
-  color: #fff;
+  background: rgba(120, 120, 128, 0.18);
 }
 
 @media (max-width: 768px) {
@@ -424,6 +454,6 @@ body {
   .step-right {
     max-width: none;
     border-left: none;
-    border-top: 1px solid #c8d1e0;
+    border-top: 0.5px solid #e5e5ea;
   }
 }

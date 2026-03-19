@@ -93,7 +93,7 @@ function showClickFeedback(x, y) {
 
 // 중복 캡처 방지 (pointerdown + click 동시 발생 대응)
 let lastCaptureTime = 0;
-const CAPTURE_DEBOUNCE = 400; // 400ms 내 중복 무시
+const CAPTURE_DEBOUNCE = 200; // 200ms 내 중복 무시
 
 // 클릭 데이터를 수집하고 전송하는 핵심 함수
 function handleCapture(event) {
@@ -210,7 +210,7 @@ document.addEventListener('pointerdown', (event) => {
   if (event.button !== 0) return;
   // click 이벤트가 올 수 있으니 약간 지연 후 확인
   // click이 이미 처리됐으면 debounce로 무시됨
-  setTimeout(() => handleCapture(event), 250);
+  setTimeout(() => handleCapture(event), 100);
 }, true);
 
 // 3) Tab/Enter 키로 포커스 이동 감지
