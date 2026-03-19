@@ -605,6 +605,8 @@ function exportAs(format) {
 
     if (format === 'html') {
       exportToHTML(title, steps);
+    } else if (format === 'pdf') {
+      exportToPDF(title, steps);
     } else if (format === 'pptx') {
       exportToPPTX(title, steps);
     } else if (format === 'gif') {
@@ -719,6 +721,93 @@ function exportToHTML(title, steps) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+// ─── PDF 내보내기 (인쇄 다이얼로그) ───
+function exportToPDF(title, steps) {
+  const html = `<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>${escapeHtml(title)}</title>
+<style>
+  @page { size: A4; margin: 15mm; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Malgun Gothic', -apple-system, sans-serif;
+    color: #1a1a2e; font-size: 12px; line-height: 1.5;
+  }
+  .cover { text-align: center; padding: 80px 20px; page-break-after: always; }
+  .cover h1 { font-size: 32px; color: #1b2a4a; margin-bottom: 12px; }
+  .cover .meta { color: #6b7b9e; font-size: 14px; }
+  .step { page-break-inside: avoid; margin-bottom: 20px; border: 1px solid #c8d1e0; border-radius: 8px; overflow: hidden; }
+  .step.modified { border: 2px solid #7c3aed; }
+  .step-header { padding: 8px 14px; background: #1b2a4a; display: flex; justify-content: space-between; align-items: center; }
+  .step-num { font-weight: 700; color: #fff; font-size: 12px; background: #4a90d9; padding: 2px 10px; border-radius: 4px; }
+  .step-url { font-size: 10px; color: #6b7b9e; }
+  .mod-badge { font-size: 9px; font-weight: 700; color: #fff; background: #7c3aed; padding: 1px 6px; border-radius: 6px; margin-left: 6px; }
+  .change-banner { padding: 5px 14px; background: #faf5ff; border-bottom: 1px solid #ddd6fe; font-size: 10px; color: #6d28d9; font-weight: 600; }
+  .step-body { display: flex; }
+  .step-img { flex: 7; min-width: 0; }
+  .step-img img { width: 100%; display: block; }
+  .step-desc { flex: 3; min-width: 150px; max-width: 280px; background: #f4f6fa; border-left: 1px solid #c8d1e0; }
+  .step-desc-header { padding: 8px 12px; background: #2c3e6b; font-size: 11px; font-weight: 700; color: #fff; text-align: center; }
+  .marker-row { display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #e8ecf4; }
+  .marker-row:last-child { border-bottom: none; }
+  .marker-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; border-radius: 50%; background: #e63232; color: #fff; font-size: 10px; font-weight: 700; flex-shrink: 0; }
+  .marker-text { font-size: 11px; line-height: 1.5; }
+  .footer { text-align: center; color: #6b7b9e; font-size: 10px; margin-top: 30px; padding: 16px; }
+  @media print {
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .step { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="cover">
+  <h1>${escapeHtml(title)}</h1>
+  <div class="meta">작성일: ${new Date().toLocaleDateString('ko-KR')} | 총 ${steps.length}단계</div>
+</div>
+${steps.map(step => {
+  const markers = step.markers || [];
+  const modClass = step.modified ? ' modified' : '';
+  const modBadge = step.modified ? `<span class="mod-badge">${step.changeType === 're-recorded' ? '재녹화됨' : '수정됨'}</span>` : '';
+  const changeBanner = step.modified && step.changeSummary
+    ? `<div class="change-banner">${step.changeType === 're-recorded' ? '🔄' : '✏️'} ${escapeHtml(step.changeSummary)}</div>` : '';
+  let descHtml;
+  if (markers.length > 0) {
+    descHtml = markers.map((m, i) =>
+      `<div class="marker-row"><span class="marker-badge">${i + 1}</span><span class="marker-text">${escapeHtml(m.description || '(설명 없음)')}</span></div>`
+    ).join('');
+  } else {
+    descHtml = `<div style="padding:12px;font-size:11px">${escapeHtml(step.description || '(설명 없음)')}</div>`;
+  }
+  return `<div class="step${modClass}">
+  <div class="step-header">
+    <span class="step-num">Step ${step.stepNumber}${modBadge}</span>
+    <span class="step-url">${escapeHtml(step.pageTitle || '')}</span>
+  </div>
+  ${changeBanner}
+  <div class="step-body">
+    <div class="step-img"><img src="${step.screenshotWithMarker}" alt="Step ${step.stepNumber}"></div>
+    <div class="step-desc">
+      <div class="step-desc-header">설명</div>
+      ${descHtml}
+    </div>
+  </div>
+</div>`;
+}).join('\n')}
+<div class="footer">DX-AutoManual로 생성됨</div>
+<script>window.onload = function() { window.print(); }<\/script>
+</body>
+</html>`;
+
+  // 새 탭에서 열어서 인쇄 다이얼로그 → PDF로 저장
+  const blob = new Blob([html], { type: 'text/html; charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  chrome.tabs.create({ url }, (tab) => {
+    // blob URL은 탭이 닫히면 자동 해제됨
+  });
 }
 
 // ─── PPT 내보내기 ───
