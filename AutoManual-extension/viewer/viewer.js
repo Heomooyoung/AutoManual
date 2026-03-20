@@ -88,6 +88,7 @@ function renderSteps() {
     const left = document.createElement('div');
     left.className = 'step-left';
 
+    // ── 상단 헤더 바 (Step 번호 + 제목 + 액션 버튼 한 줄) ──
     const header = document.createElement('div');
     header.className = 'step-header';
 
@@ -96,7 +97,6 @@ function renderSteps() {
     const num = document.createElement('span');
     num.className = 'step-num';
     num.textContent = `Step ${step.stepNumber}`;
-    // 수정됨 배지
     if (step.modified) {
       const modBadge = document.createElement('span');
       modBadge.className = 'step-modified-badge';
@@ -110,28 +110,27 @@ function renderSteps() {
     headerLeft.appendChild(num);
     headerLeft.appendChild(url);
 
-    // 단계 관리 버튼들
     const headerActions = document.createElement('div');
     headerActions.className = 'step-header-actions';
 
+    const reRecBtn = document.createElement('button');
+    reRecBtn.textContent = '🔄 재녹화';
+    reRecBtn.addEventListener('click', () => startViewerReRecord(si, step.stepNumber));
+
     const editBtn = document.createElement('button');
     editBtn.textContent = '✏️ 편집기';
-    editBtn.title = '그리기 편집기 열기';
     editBtn.addEventListener('click', () => {
-      const editorUrl = chrome.runtime.getURL('editor/editor.html') + '?step=' + si;
-      chrome.tabs.create({ url: editorUrl });
+      chrome.tabs.create({ url: chrome.runtime.getURL('editor/editor.html') + '?step=' + si });
     });
 
     const upBtn = document.createElement('button');
-    upBtn.textContent = '⬆️';
-    upBtn.title = '위로';
+    upBtn.textContent = '↑';
     upBtn.addEventListener('click', () => {
       chrome.runtime.sendMessage({ type: 'MOVE_STEP', from: si, to: si - 1 }, () => loadAndRender());
     });
 
     const downBtn = document.createElement('button');
-    downBtn.textContent = '⬇️';
-    downBtn.title = '아래로';
+    downBtn.textContent = '↓';
     downBtn.addEventListener('click', () => {
       chrome.runtime.sendMessage({ type: 'MOVE_STEP', from: si, to: si + 1 }, () => loadAndRender());
     });
@@ -139,18 +138,9 @@ function renderSteps() {
     const delBtn = document.createElement('button');
     delBtn.className = 'del-btn';
     delBtn.textContent = '🗑️';
-    delBtn.title = '이 단계 삭제';
     delBtn.addEventListener('click', () => {
       if (!confirm(`Step ${step.stepNumber}을 삭제하시겠습니까?`)) return;
       chrome.runtime.sendMessage({ type: 'DELETE_STEP', index: si }, () => loadAndRender());
-    });
-
-    // 재녹화 버튼
-    const reRecBtn = document.createElement('button');
-    reRecBtn.textContent = '🔄 재녹화';
-    reRecBtn.title = '이 단계 재녹화';
-    reRecBtn.addEventListener('click', () => {
-      startViewerReRecord(si, step.stepNumber);
     });
 
     headerActions.appendChild(reRecBtn);
@@ -188,7 +178,7 @@ function renderSteps() {
     const rightHeader = document.createElement('div');
     rightHeader.className = 'step-right-header';
     const rightTitle = document.createElement('span');
-    rightTitle.textContent = '설명 (편집 가능)';
+    rightTitle.textContent = '설명';
     rightHeader.appendChild(rightTitle);
 
     right.appendChild(rightHeader);
@@ -213,13 +203,83 @@ function renderSteps() {
       }
     });
 
+    // 마커 드래그 상태
+    let dragMarkerFrom = null;
+
     markers.forEach((marker, mi) => {
       const row = document.createElement('div');
       row.className = 'step-marker-row';
+      row.dataset.markerIndex = mi;
+      row.draggable = true;
 
-      // 좌측: 번호 + 삭제
+      // 드래그 이벤트
+      row.addEventListener('dragstart', (e) => {
+        dragMarkerFrom = mi;
+        row.classList.add('marker-dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', mi);
+      });
+      row.addEventListener('dragend', () => {
+        row.classList.remove('marker-dragging');
+        right.querySelectorAll('.marker-dragover').forEach(r => r.classList.remove('marker-dragover'));
+        dragMarkerFrom = null;
+      });
+      row.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (dragMarkerFrom !== null && dragMarkerFrom !== mi) {
+          row.classList.add('marker-dragover');
+        }
+      });
+      row.addEventListener('dragleave', () => {
+        row.classList.remove('marker-dragover');
+      });
+      row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        row.classList.remove('marker-dragover');
+        if (dragMarkerFrom !== null && dragMarkerFrom !== mi) {
+          const order = markers.map((_, i) => i);
+          const [moved] = order.splice(dragMarkerFrom, 1);
+          order.splice(mi, 0, moved);
+          chrome.runtime.sendMessage({
+            type: 'REORDER_MARKERS',
+            stepIndex: si,
+            newOrder: order
+          }, () => {
+            loadAndRender();
+            // 일시적 피드백: 이동된 위치 하이라이트
+            setTimeout(() => {
+              const stepEl = container.querySelectorAll('.step')[si];
+              if (stepEl) {
+                // 캡처 이미지 깜빡임
+                const img = stepEl.querySelector('.step-left img');
+                if (img) {
+                  img.style.outline = '3px solid #007aff';
+                  img.style.outlineOffset = '-3px';
+                  img.style.transition = 'outline 0.3s';
+                  setTimeout(() => { img.style.outline = 'none'; }, 1500);
+                }
+                // 이동된 설명 행 하이라이트
+                const rows = stepEl.querySelectorAll('.step-marker-row');
+                if (rows[mi]) {
+                  rows[mi].classList.add('marker-just-moved');
+                  setTimeout(() => rows[mi].classList.remove('marker-just-moved'), 1500);
+                }
+              }
+            }, 100);
+          });
+        }
+      });
+
+      // 좌측: 번호 + 삭제 + 드래그 핸들
       const rowLeft = document.createElement('div');
       rowLeft.className = 'marker-row-left';
+
+      const dragHandle = document.createElement('span');
+      dragHandle.className = 'marker-drag-handle';
+      dragHandle.textContent = '⠿';
+      dragHandle.title = '드래그하여 순서 변경';
+      rowLeft.appendChild(dragHandle);
 
       const badge = document.createElement('span');
       badge.className = 'step-marker-badge';
@@ -238,20 +298,10 @@ function renderSteps() {
         rowLeft.appendChild(mDel);
       }
 
-      // 우측: 요소 정보 + 설명 편집
+      // 우측: 설명 편집
       const content = document.createElement('div');
       content.className = 'marker-content';
 
-      const elText = marker.element?.text || '';
-      const elTag = (marker.element?.tag || '').toLowerCase();
-      if (elText || elTag) {
-        const tag = document.createElement('div');
-        tag.className = 'marker-el-tag';
-        tag.textContent = `📍 ${elText ? '"' + elText + '"' : ''} ${elTag}`;
-        content.appendChild(tag);
-      }
-
-      // 편집 가능한 textarea
       const ta = document.createElement('textarea');
       ta.className = 'marker-desc-edit';
       ta.value = marker.description || '';
@@ -300,13 +350,7 @@ document.getElementById('closeViewerBtn').addEventListener('click', () => {
   window.close();
 });
 
-// ── HTML 내보내기 ──
-document.getElementById('exportHtmlBtn').addEventListener('click', () => {
-  chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
-    if (!response?.steps?.length) { alert('데이터가 없습니다.'); return; }
-    exportToHTML(title, response.steps);
-  });
-});
+// (HTML 내보내기는 사이드패널 Export에서 제공)
 
 function exportToHTML(title, steps) {
   const html = `<!DOCTYPE html>

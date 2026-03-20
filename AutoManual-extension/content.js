@@ -3,6 +3,10 @@
 // 역할: 웹페이지에서 클릭 이벤트 감지
 // ========================================
 
+// 중복 주입 방지
+if (!window.__autoManualContentLoaded) {
+window.__autoManualContentLoaded = true;
+
 // 녹화 중인지 확인
 let isRecording = false;
 let clickFeedbackTimeout = null;
@@ -342,3 +346,5 @@ function findMeaningfulElement(el) {
   // 후보가 없으면 원래 요소 반환
   return el;
 }
+
+} // end of __autoManualContentLoaded guard

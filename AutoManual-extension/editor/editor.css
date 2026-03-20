@@ -247,6 +247,43 @@ body {
   margin-bottom: 8px;
   overflow: hidden;
   box-shadow: 0 0.5px 2px rgba(0, 0, 0, 0.06);
+  cursor: grab;
+  transition: opacity 0.2s, background 0.3s, box-shadow 0.3s;
+}
+
+.desc-item:active {
+  cursor: grabbing;
+}
+
+.desc-item.desc-dragging {
+  opacity: 0.35;
+}
+
+.desc-item.desc-dragover {
+  box-shadow: inset 0 -3px 0 #007aff, 0 0.5px 2px rgba(0, 0, 0, 0.06);
+}
+
+.desc-item.desc-just-moved {
+  background: rgba(0, 122, 255, 0.08);
+  box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.25);
+  animation: desc-moved-flash 1.5s ease;
+}
+
+@keyframes desc-moved-flash {
+  0% { background: rgba(0, 122, 255, 0.2); }
+  100% { background: #ffffff; }
+}
+
+.desc-drag-handle {
+  font-size: 14px;
+  color: #c7c7cc;
+  cursor: grab;
+  user-select: none;
+  transition: color 0.15s;
+}
+
+.desc-item:hover .desc-drag-handle {
+  color: #8e8e93;
 }
 
 .desc-item-header {

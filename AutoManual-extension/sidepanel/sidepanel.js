@@ -18,6 +18,8 @@ const modePerPage = document.getElementById('modePerPage');
 
 let isRecording = false;
 let reRecordStepIndex = null; // 재녹화 중인 단계 인덱스
+let selectMode = false;
+let selectedIndices = new Set();
 
 // ─── 매뉴얼 저장/불러오기 ───
 const saveManualBtn = document.getElementById('saveManualBtn');
@@ -31,19 +33,58 @@ const reRecordCancel = document.getElementById('reRecordCancel');
 const reRecordFinish = document.getElementById('reRecordFinish');
 const reRecordThumbs = document.getElementById('reRecordThumbs');
 
-saveManualBtn.addEventListener('click', () => {
+saveManualBtn.addEventListener('click', async () => {
   const title = document.getElementById('manualTitle').value || '제목 없음';
-  chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (res) => {
-    if (!res?.steps?.length) {
-      alert('저장할 단계가 없습니다.');
-      return;
+  const stepsRes = await new Promise(r => chrome.runtime.sendMessage({ type: 'GET_STEPS' }, r));
+  if (!stepsRes?.steps?.length) {
+    alert('저장할 단계가 없습니다.');
+    return;
+  }
+
+  // 파일로 저장 (폴더/파일명 선택)
+  try {
+    const saveData = {
+      title,
+      savedAt: Date.now(),
+      stepCount: stepsRes.steps.length,
+      steps: stepsRes.steps
+    };
+    const json = JSON.stringify(saveData);
+    const blob = new Blob([json], { type: 'application/json' });
+
+    if (typeof showSaveFilePicker === 'function') {
+      // 파일 선택 다이얼로그
+      const handle = await showSaveFilePicker({
+        suggestedName: `${title}.json`,
+        types: [{
+          description: 'AutoManual 파일',
+          accept: { 'application/json': ['.json'] }
+        }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      alert(`"${title}" 매뉴얼이 파일로 저장되었습니다.`);
+    } else {
+      // 폴백: 다운로드 방식
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${title}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
     }
-    chrome.runtime.sendMessage({ type: 'SAVE_MANUAL', title }, (response) => {
-      if (response?.success) {
-        alert(`"${title}" 매뉴얼이 저장되었습니다.`);
-      }
-    });
-  });
+
+    // 내부 저장도 병행
+    chrome.runtime.sendMessage({ type: 'SAVE_MANUAL', title });
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      console.error('저장 실패:', err);
+      alert('파일 저장에 실패했습니다.');
+    }
+  }
 });
 
 loadManualBtn.addEventListener('click', () => {
@@ -57,6 +98,59 @@ loadManualBtn.addEventListener('click', () => {
 
 manualListClose.addEventListener('click', () => {
   manualListPanel.style.display = 'none';
+});
+
+// ─── 파일에서 불러오기 ───
+document.getElementById('loadFileBtn').addEventListener('click', async () => {
+  try {
+    let fileData;
+    if (typeof showOpenFilePicker === 'function') {
+      const [handle] = await showOpenFilePicker({
+        types: [{
+          description: 'AutoManual 파일',
+          accept: { 'application/json': ['.json'] }
+        }]
+      });
+      const file = await handle.getFile();
+      fileData = await file.text();
+    } else {
+      // 폴백: input[type=file]
+      fileData = await new Promise((resolve, reject) => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.addEventListener('change', async () => {
+          if (input.files[0]) {
+            resolve(await input.files[0].text());
+          } else {
+            reject(new Error('취소'));
+          }
+        });
+        input.click();
+      });
+    }
+
+    const data = JSON.parse(fileData);
+    if (!data.steps?.length) {
+      alert('유효한 매뉴얼 파일이 아닙니다.');
+      return;
+    }
+
+    if (!confirm('현재 작업을 대체하고 파일에서 불러오시겠습니까?')) return;
+
+    // background에 steps 덮어쓰기
+    chrome.runtime.sendMessage({ type: 'LOAD_FILE_STEPS', steps: data.steps }, (response) => {
+      if (response?.success) {
+        document.getElementById('manualTitle').value = data.title || '';
+        manualListPanel.style.display = 'none';
+        refreshStepList(data.steps);
+      }
+    });
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      console.error('파일 불러오기 실패:', err);
+    }
+  }
 });
 
 function refreshManualList() {
@@ -194,6 +288,9 @@ function setMode(mode) {
   chrome.runtime.sendMessage({ type: 'SET_CAPTURE_MODE', mode });
 }
 
+// ─── 캡처 버튼 ───
+const captureBtn = document.getElementById('captureBtn');
+
 // ─── 초기화 ───
 chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
   if (response) {
@@ -204,6 +301,87 @@ chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
     }
   }
 });
+
+captureBtn.addEventListener('click', () => {
+  if (!isRecording) return;
+  captureBtn.disabled = true;
+  chrome.runtime.sendMessage({ type: 'MANUAL_CAPTURE' }, (response) => {
+    captureBtn.disabled = false;
+    if (!response?.captured) {
+      alert(response?.error || '캡처에 실패했습니다.');
+    }
+  });
+});
+
+// ─── 선택 모드 ───
+const selectBar = document.getElementById('selectBar');
+const selectToggleBtn = document.getElementById('selectToggleBtn');
+const selectAllBtn = document.getElementById('selectAllBtn');
+const selectCount = document.getElementById('selectCount');
+const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
+
+selectToggleBtn.addEventListener('click', () => {
+  selectMode = !selectMode;
+  selectedIndices.clear();
+  selectToggleBtn.classList.toggle('active', selectMode);
+  stepList.classList.toggle('select-mode', selectMode);
+  updateSelectUI();
+});
+
+selectAllBtn.addEventListener('click', () => {
+  const cards = stepList.querySelectorAll('.step-thumb-card');
+  if (selectedIndices.size === cards.length) {
+    selectedIndices.clear();
+  } else {
+    cards.forEach(c => selectedIndices.add(Number(c.dataset.index)));
+  }
+  updateSelectVisuals();
+  updateSelectUI();
+});
+
+deleteSelectedBtn.addEventListener('click', () => {
+  if (selectedIndices.size === 0) return;
+  if (!confirm(`선택된 ${selectedIndices.size}개 단계를 삭제하시겠습니까?`)) return;
+  chrome.runtime.sendMessage({
+    type: 'DELETE_STEPS_MULTI',
+    indices: Array.from(selectedIndices)
+  }, (response) => {
+    if (response?.success) {
+      selectedIndices.clear();
+      selectMode = false;
+      selectToggleBtn.classList.remove('active');
+      stepList.classList.remove('select-mode');
+      updateSelectUI();
+      refreshStepList(response.steps);
+    }
+  });
+});
+
+function updateSelectUI() {
+  const show = selectMode;
+  selectAllBtn.style.display = show ? 'inline-block' : 'none';
+  selectCount.style.display = show ? 'inline' : 'none';
+  deleteSelectedBtn.style.display = show ? 'inline-block' : 'none';
+  selectCount.textContent = `${selectedIndices.size}개 선택`;
+
+  const cards = stepList.querySelectorAll('.step-thumb-card');
+  if (selectedIndices.size === cards.length && cards.length > 0) {
+    selectAllBtn.textContent = '전체해제';
+  } else {
+    selectAllBtn.textContent = '전체선택';
+  }
+
+  updateSelectVisuals();
+}
+
+function updateSelectVisuals() {
+  stepList.querySelectorAll('.step-thumb-card').forEach(card => {
+    const idx = Number(card.dataset.index);
+    card.classList.toggle('selected', selectedIndices.has(idx));
+    const cb = card.querySelector('.step-thumb-checkbox');
+    if (cb) cb.textContent = selectedIndices.has(idx) ? '✓' : '';
+  });
+}
 
 // ─── 녹화 시작/중지 ───
 // background.js가 모든 탭에 녹화 상태를 직접 전파하므로
@@ -216,13 +394,15 @@ recordBtn.addEventListener('click', () => {
       document.getElementById('manualTitle').focus();
       return;
     }
-    // 캡처 모드를 클릭당 1장으로 리셋
-    setMode('per-click');
+    // 이어서 녹화 (기존 steps 유지)
     chrome.runtime.sendMessage({ type: 'START_RECORDING' }, (response) => {
       if (response?.success) {
         isRecording = true;
         updateRecordButton();
-        clearStepList();
+        // 기존 스텝이 있으면 유지, 없으면 빈 상태
+        if (response.steps?.length > 0) {
+          refreshStepList(response.steps);
+        }
       }
     });
   } else {
@@ -235,13 +415,38 @@ recordBtn.addEventListener('click', () => {
   }
 });
 
+// ─── 신규 녹화 버튼 ───
+const newManualBtn = document.getElementById('newManualBtn');
+newManualBtn.addEventListener('click', () => {
+  if (isRecording) {
+    alert('녹화 중에는 신규를 시작할 수 없습니다. 먼저 녹화를 중지하세요.');
+    return;
+  }
+  // 현재 스텝이 있는지 확인
+  const hasSteps = stepList.querySelectorAll('.step-thumb-card').length > 0;
+  if (hasSteps) {
+    if (!confirm('저장하지 않으면 현재 작업 내용이 모두 삭제됩니다.\n신규로 시작하시겠습니까?')) return;
+  }
+  chrome.runtime.sendMessage({ type: 'NEW_RECORDING' }, (response) => {
+    if (response?.success) {
+      isRecording = false;
+      updateRecordButton();
+      clearStepList();
+      document.getElementById('manualTitle').value = '';
+      document.getElementById('manualTitle').focus();
+    }
+  });
+});
+
 function updateRecordButton() {
   if (isRecording) {
     recordBtn.classList.add('recording');
     recordBtnText.textContent = '녹화 중지';
+    captureBtn.disabled = false;
   } else {
     recordBtn.classList.remove('recording');
     recordBtnText.textContent = '녹화 시작';
+    captureBtn.disabled = true;
   }
 }
 
@@ -308,6 +513,11 @@ function clearStepList() {
   emptyState.style.display = 'block';
   bottomBar.style.display = 'none';
   stepCount.textContent = '0 단계';
+  selectBar.style.display = 'none';
+  selectMode = false;
+  selectedIndices.clear();
+  selectToggleBtn.classList.remove('active');
+  stepList.classList.remove('select-mode');
 }
 
 function loadSteps() {
@@ -371,13 +581,30 @@ function addStepCard(step) {
     }
   });
 
+  // ── 선택 체크박스 ──
+  const checkbox = document.createElement('div');
+  checkbox.className = 'step-thumb-checkbox';
+  card.appendChild(checkbox);
+
+  // 선택 모드 클릭 처리
+  card.addEventListener('click', (e) => {
+    if (!selectMode) return;
+    e.stopPropagation();
+    if (selectedIndices.has(stepIndex)) {
+      selectedIndices.delete(stepIndex);
+    } else {
+      selectedIndices.add(stepIndex);
+    }
+    updateSelectUI();
+  });
+
   // ── 썸네일 이미지 ──
   const img = document.createElement('img');
   img.className = 'step-thumb-img';
   img.src = step.screenshotWithMarker;
   img.alt = `Step ${step.stepNumber}`;
   img.draggable = false; // 이미지 자체 드래그 방지
-  img.addEventListener('click', () => openImageFullscreen(step.screenshotWithMarker));
+  img.addEventListener('click', () => { if (!selectMode) openImageFullscreen(step.screenshotWithMarker); });
 
   // ── 오버레이: Step 번호 ──
   const numBadge = document.createElement('span');
@@ -437,7 +664,6 @@ function addStepCard(step) {
   delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteStep(stepIndex); });
 
   actionBar.appendChild(reRecBtn);
-  actionBar.appendChild(editBtn);
   actionBar.appendChild(upBtn);
   actionBar.appendChild(downBtn);
   actionBar.appendChild(delBtn);
@@ -468,6 +694,7 @@ function refreshStepListFromBg() {
 function updateStepCount() {
   const count = stepList.querySelectorAll('.step-thumb-card').length;
   stepCount.textContent = `${count} 단계`;
+  selectBar.style.display = count > 0 ? 'flex' : 'none';
 }
 
 // ─── 전체 목록 새로고침 ───
@@ -482,6 +709,11 @@ function refreshStepList(stepsData) {
     stepsData.forEach(addStepCard);
   }
   updateStepCount();
+  // 선택 모드 유지 시 비주얼 동기화
+  if (selectMode) {
+    stepList.classList.add('select-mode');
+    updateSelectVisuals();
+  }
 }
 
 // ─── 단계 삭제 ───
@@ -723,7 +955,7 @@ function exportToHTML(title, steps) {
   URL.revokeObjectURL(url);
 }
 
-// ─── PDF 내보내기 (인쇄 다이얼로그) ───
+// ─── PDF 내보내기 (canvas 렌더링으로 한글 지원) ───
 function exportToPDF(title, steps) {
   if (typeof jspdf === 'undefined') {
     alert('PDF 라이브러리를 불러오지 못했습니다.');
@@ -736,154 +968,203 @@ function exportToPDF(title, steps) {
   document.body.appendChild(statusEl);
 
   const { jsPDF } = jspdf;
-  // 가로(landscape) A4: 297 x 210 mm
   const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const PW = 297, PH = 210;
-  const M = 10; // 마진
+  // 캔버스 해상도 (mm → px, 3x for quality)
+  const SCALE = 3;
+  const CW = PW * SCALE, CH = PH * SCALE;
+
+  // 텍스트를 canvas로 렌더링하는 헬퍼
+  function renderPageToCanvas(drawFn) {
+    const canvas = document.createElement('canvas');
+    canvas.width = CW;
+    canvas.height = CH;
+    const ctx = canvas.getContext('2d');
+    drawFn(ctx, CW, CH, SCALE);
+    return canvas.toDataURL('image/jpeg', 0.92);
+  }
 
   // === 표지 ===
-  pdf.setFillColor(27, 42, 74);
-  pdf.rect(0, 0, PW, PH, 'F');
-  // 상단 장식선
-  pdf.setFillColor(74, 144, 217);
-  pdf.rect(0, 0, PW, 2, 'F');
-  // 제목
-  pdf.setTextColor(255, 255, 255);
-  pdf.setFontSize(28);
-  pdf.text(title, PW / 2, PH * 0.4, { align: 'center' });
-  // 구분선
-  pdf.setFillColor(74, 144, 217);
-  pdf.rect(PW / 2 - 30, PH * 0.47, 60, 1, 'F');
-  // 메타
-  pdf.setFontSize(12);
-  pdf.setTextColor(107, 123, 158);
-  pdf.text(`${new Date().toLocaleDateString('ko-KR')}  |  ${steps.length} steps`, PW / 2, PH * 0.55, { align: 'center' });
-  // 브랜딩
-  pdf.setFontSize(9);
-  pdf.setTextColor(74, 85, 104);
-  pdf.text('DX-AutoManual', PW / 2, PH * 0.85, { align: 'center' });
+  const coverImg = renderPageToCanvas((ctx, w, h, s) => {
+    ctx.fillStyle = '#1B2A4A';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#4A90D9';
+    ctx.fillRect(0, 0, w, 6 * s);
+    // 제목
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${28 * s}px "Malgun Gothic", -apple-system, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(title, w / 2, h * 0.4);
+    // 구분선
+    ctx.fillStyle = '#4A90D9';
+    ctx.fillRect(w / 2 - 90 * s, h * 0.47, 180 * s, 3 * s);
+    // 메타
+    ctx.fillStyle = '#6B7B9E';
+    ctx.font = `${12 * s}px "Malgun Gothic", sans-serif`;
+    ctx.fillText(`${new Date().toLocaleDateString('ko-KR')}  |  총 ${steps.length}단계`, w / 2, h * 0.55);
+    // 브랜딩
+    ctx.fillStyle = '#4A5568';
+    ctx.font = `${9 * s}px "Malgun Gothic", sans-serif`;
+    ctx.fillText('DX-AutoManual', w / 2, h * 0.85);
+  });
+  pdf.addImage(coverImg, 'JPEG', 0, 0, PW, PH);
 
-  // === 각 단계 (1 step = 1 page) ===
+  // === PDF 페이지 렌더 헬퍼 (10개씩 분할) ===
+  const PDF_MARKERS_PER_PAGE = 10;
+
+  function renderStepPage(ctx, w, h, s, step, markersSlice, pageLabel, screenshotBitmap) {
+    const M = 10 * s;
+
+    ctx.fillStyle = '#E8ECF4';
+    ctx.fillRect(0, 0, w, h);
+
+    // 헤더 바
+    ctx.fillStyle = '#1B2A4A';
+    ctx.fillRect(0, 0, w, 14 * s);
+
+    // Step 배지
+    ctx.fillStyle = '#4A90D9';
+    roundRect(ctx, M, 3 * s, 28 * s, 8 * s, 4 * s);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${9 * s}px "Malgun Gothic", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`Step ${step.stepNumber}${pageLabel}`, M + 14 * s, 7 * s);
+
+    // 페이지 제목
+    ctx.fillStyle = '#6B7B9E';
+    ctx.font = `${7 * s}px "Malgun Gothic", sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText((step.pageTitle || '').substring(0, 60), M + 32 * s, 7 * s);
+
+    // 스크린샷 영역
+    const imgX = M;
+    const imgY = 18 * s;
+    const imgAreaW = w * 0.68 - M;
+    const imgAreaH = h - 24 * s;
+
+    ctx.fillStyle = '#ffffff';
+    roundRect(ctx, imgX, imgY, imgAreaW, imgAreaH, 6 * s);
+    ctx.fill();
+
+    if (screenshotBitmap) {
+      const pad = 2 * s;
+      const ratio = Math.min((imgAreaW - pad * 2) / screenshotBitmap.width, (imgAreaH - pad * 2) / screenshotBitmap.height);
+      const dw = screenshotBitmap.width * ratio;
+      const dh = screenshotBitmap.height * ratio;
+      const dx = imgX + pad + (imgAreaW - pad * 2 - dw) / 2;
+      const dy = imgY + pad + (imgAreaH - pad * 2 - dh) / 2;
+      ctx.drawImage(screenshotBitmap, dx, dy, dw, dh);
+    }
+
+    // 우측 설명 패널
+    const panelX = w * 0.68 + 4 * s;
+    const panelY = 18 * s;
+    const panelW = w - panelX - M;
+    const panelH = h - 24 * s;
+
+    ctx.fillStyle = '#ffffff';
+    roundRect(ctx, panelX, panelY, panelW, panelH, 6 * s);
+    ctx.fill();
+
+    // 패널 헤더
+    ctx.fillStyle = '#2C3E6B';
+    roundRect(ctx, panelX, panelY, panelW, 10 * s, 6 * s);
+    ctx.fill();
+    ctx.fillStyle = '#2C3E6B';
+    ctx.fillRect(panelX, panelY + 6 * s, panelW, 4 * s);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${7 * s}px "Malgun Gothic", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('설명', panelX + panelW / 2, panelY + 5.5 * s);
+
+    // 마커별 설명
+    let ty = panelY + 14 * s;
+
+    if (markersSlice.length > 0) {
+      const rowH = Math.min(14 * s, (panelH - 16 * s) / markersSlice.length);
+
+      for (let di = 0; di < markersSlice.length; di++) {
+        const item = markersSlice[di];
+        const ry = ty + di * rowH;
+        const numStr = String(item.number);
+
+        // 번호 타원 (2자리면 가로 넓게)
+        const badgeRx = numStr.length >= 2 ? 4.5 * s : 3 * s;
+        const badgeRy = 3 * s;
+        ctx.fillStyle = '#E63232';
+        ctx.beginPath();
+        ctx.ellipse(panelX + 6 * s, ry + 2 * s, badgeRx, badgeRy, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `bold ${7 * s}px "Malgun Gothic", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(numStr, panelX + 6 * s, ry + 2.2 * s);
+
+        // 설명 텍스트
+        ctx.fillStyle = '#1A1A2E';
+        ctx.font = `${7 * s}px "Malgun Gothic", sans-serif`;
+        ctx.textAlign = 'left';
+        const desc = (item.desc || '').substring(0, 45);
+        ctx.fillText(desc, panelX + (6 + badgeRx / s + 2) * s, ry + 2.5 * s);
+      }
+    } else {
+      ctx.fillStyle = '#6B7B9E';
+      ctx.font = `${7 * s}px "Malgun Gothic", sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.fillText((step.description || '').substring(0, 80), panelX + 4 * s, ty + 3 * s);
+    }
+  }
+
+  // === 각 단계 (10개 초과 시 페이지 분할) ===
   let loaded = 0;
 
   const addStepPages = async () => {
     for (let si = 0; si < steps.length; si++) {
       const step = steps[si];
-      pdf.addPage('a4', 'landscape');
-
-      // 배경
-      pdf.setFillColor(232, 236, 244);
-      pdf.rect(0, 0, PW, PH, 'F');
-
-      // 상단 헤더 바
-      pdf.setFillColor(27, 42, 74);
-      pdf.rect(0, 0, PW, 14, 'F');
-
-      // Step 번호 배지
-      pdf.setFillColor(74, 144, 217);
-      pdf.roundedRect(M, 3, 24, 8, 1.5, 1.5, 'F');
-      pdf.setTextColor(255, 255, 255);
-      pdf.setFontSize(9);
-      pdf.text(`Step ${step.stepNumber}`, M + 12, 8.2, { align: 'center' });
-
-      // 수정 배지
-      if (step.modified) {
-        const modLabel = step.changeType === 're-recorded' ? 'Re-recorded' : 'Edited';
-        pdf.setFillColor(124, 58, 237);
-        pdf.roundedRect(PW - M - 22, 3, 22, 8, 1.5, 1.5, 'F');
-        pdf.setTextColor(255, 255, 255);
-        pdf.setFontSize(7);
-        pdf.text(modLabel, PW - M - 11, 8.2, { align: 'center' });
-      }
-
-      // 페이지 제목
-      pdf.setTextColor(107, 123, 158);
-      pdf.setFontSize(8);
-      const pageTitle = (step.pageTitle || '').substring(0, 80);
-      pdf.text(pageTitle, M + 28, 8.2);
+      const markers = step.markers || [];
 
       // 스크린샷 이미지 로드
-      const imgData = step.screenshotWithMarker;
-      if (imgData) {
+      let screenshotBitmap = null;
+      if (step.screenshotWithMarker) {
         try {
-          // 좌측: 스크린샷 영역
-          const imgX = M;
-          const imgY = 18;
-          const imgAreaW = PW * 0.68 - M;
-          const imgAreaH = PH - 24;
-
-          // 흰색 카드 배경
-          pdf.setFillColor(255, 255, 255);
-          pdf.roundedRect(imgX, imgY, imgAreaW, imgAreaH, 2, 2, 'F');
-
-          // 이미지 (비율 유지)
-          const imgPad = 2;
-          pdf.addImage(imgData, 'JPEG',
-            imgX + imgPad, imgY + imgPad,
-            imgAreaW - imgPad * 2, imgAreaH - imgPad * 2,
-            undefined, 'FAST');
-        } catch (e) {
-          console.error('PDF 이미지 추가 실패:', e);
-        }
+          const resp = await fetch(step.screenshotWithMarker);
+          const blob = await resp.blob();
+          screenshotBitmap = await createImageBitmap(blob);
+        } catch (e) { /* skip */ }
       }
 
-      // 우측: 설명 패널
-      const panelX = PW * 0.68 + 4;
-      const panelY = 18;
-      const panelW = PW - panelX - M;
-      const panelH = PH - 24;
+      const totalPages = markers.length > 0 ? Math.ceil(markers.length / PDF_MARKERS_PER_PAGE) : 1;
 
-      // 패널 배경
-      pdf.setFillColor(255, 255, 255);
-      pdf.roundedRect(panelX, panelY, panelW, panelH, 2, 2, 'F');
+      for (let page = 0; page < totalPages; page++) {
+        pdf.addPage('a4', 'landscape');
 
-      // 패널 헤더
-      pdf.setFillColor(44, 62, 107);
-      pdf.roundedRect(panelX, panelY, panelW, 10, 2, 2, 'F');
-      pdf.setFillColor(44, 62, 107);
-      pdf.rect(panelX, panelY + 6, panelW, 4, 'F');
-      pdf.setTextColor(255, 255, 255);
-      pdf.setFontSize(9);
-      pdf.text('Description', panelX + panelW / 2, panelY + 6.5, { align: 'center' });
-
-      // 마커별 설명
-      const markers = step.markers || [];
-      let textY = panelY + 14;
-      pdf.setFontSize(8);
-
-      if (markers.length > 0) {
-        const maxRows = Math.min(markers.length, 12);
-        const rowH = Math.min(14, (panelH - 16) / maxRows);
-
-        for (let mi = 0; mi < maxRows; mi++) {
-          const m = markers[mi];
-          const ry = textY + mi * rowH;
-
-          // 번호 원
-          pdf.setFillColor(230, 50, 50);
-          pdf.circle(panelX + 6, ry + 2, 3, 'F');
-          pdf.setTextColor(255, 255, 255);
-          pdf.setFontSize(7);
-          pdf.text(String(mi + 1), panelX + 6, ry + 3, { align: 'center' });
-
-          // 설명 텍스트
-          pdf.setTextColor(26, 26, 46);
-          pdf.setFontSize(8);
-          const desc = (m.description || '').substring(0, 50);
-          pdf.text(desc, panelX + 12, ry + 3);
+        const start = page * PDF_MARKERS_PER_PAGE;
+        const end = Math.min(start + PDF_MARKERS_PER_PAGE, markers.length);
+        const slice = [];
+        for (let mi = start; mi < end; mi++) {
+          slice.push({ number: mi + 1, desc: markers[mi].description || '' });
         }
-      } else {
-        pdf.setTextColor(107, 123, 158);
-        pdf.setFontSize(8);
-        const desc = (step.description || '(No description)').substring(0, 100);
-        pdf.text(desc, panelX + 4, textY + 3, { maxWidth: panelW - 8 });
+        const pageLabel = totalPages > 1 ? ` (${page + 1}/${totalPages})` : '';
+
+        const pageImg = renderPageToCanvas((ctx, w, h, s) => {
+          renderStepPage(ctx, w, h, s, step, slice, pageLabel, screenshotBitmap);
+        });
+
+        pdf.addImage(pageImg, 'JPEG', 0, 0, PW, PH);
       }
+
+      if (screenshotBitmap) screenshotBitmap.close();
 
       loaded++;
       statusEl.textContent = `PDF 생성 중... ${loaded}/${steps.length}`;
     }
 
-    // 다운로드
     pdf.save(`${title}.pdf`);
     statusEl.remove();
   };
@@ -893,6 +1174,22 @@ function exportToPDF(title, steps) {
     console.error('PDF 생성 실패:', err);
     alert('PDF 생성에 실패했습니다: ' + err.message);
   });
+}
+
+// 라운드 사각형 헬퍼 (canvas용)
+function roundRect(ctx, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
 }
 
 // ─── PPT 내보내기 ───
@@ -952,9 +1249,10 @@ function exportToPPTX(title, steps) {
     color: '4A5568', align: 'center'
   });
 
-  // === 각 단계 슬라이드 ===
-  // 레이아웃: 좌측 스크린샷 (비율 유지) + 우측 설명 패널
-  for (const step of steps) {
+  // === 슬라이드 생성 헬퍼 (10개씩 페이지 분할) ===
+  const MARKERS_PER_PAGE = 10;
+
+  function addStepSlide(pptx, step, markersSlice, pageLabel) {
     const slide = pptx.addSlide();
     slide.background = { color: NAVY.light };
 
@@ -970,7 +1268,7 @@ function exportToPPTX(title, steps) {
       fill: { color: NAVY.accent },
       rectRadius: 0.05
     });
-    slide.addText(`Step ${step.stepNumber}`, {
+    slide.addText(`Step ${step.stepNumber}${pageLabel}`, {
       x: 0.3, y: 0.1, w: 1.0, h: 0.35,
       fontSize: 12, fontFace: FONT,
       color: NAVY.white, align: 'center', bold: true
@@ -983,7 +1281,7 @@ function exportToPPTX(title, steps) {
       color: NAVY.sub, align: 'left', valign: 'middle'
     });
 
-    // 수정됨 배지 (PPT)
+    // 수정됨 배지
     if (step.modified) {
       const modLabel = step.changeType === 're-recorded' ? '재녹화됨' : '수정됨';
       slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
@@ -993,26 +1291,19 @@ function exportToPPTX(title, steps) {
       });
       slide.addText(modLabel, {
         x: 8.6, y: 0.1, w: 1.1, h: 0.35,
-        fontSize: 9, fontFace: FONT,
+        fontSize: 7, fontFace: FONT,
         color: NAVY.white, align: 'center', bold: true
       });
     }
 
-    // ── 좌측: 스크린샷 영역 ──
-    const imgX = 0.3;
-    const imgY = 0.75;
-    const imgW = 6.6;
-    const imgH = 4.6;
-
-    // 스크린샷 카드 배경
+    // ── 좌측: 스크린샷 ──
+    const imgX = 0.3, imgY = 0.75, imgW = 6.6, imgH = 4.6;
     slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
       x: imgX, y: imgY, w: imgW, h: imgH,
       fill: { color: NAVY.white },
       rectRadius: 0.08,
       shadow: { type: 'outer', blur: 4, offset: 1, color: '000000', opacity: 0.08 }
     });
-
-    // 스크린샷 이미지 (contain → 비율 유지, 카드 안에서 센터링)
     const imgPad = 0.1;
     slide.addImage({
       data: step.screenshotWithMarker,
@@ -1022,12 +1313,7 @@ function exportToPPTX(title, steps) {
     });
 
     // ── 우측: 설명 패널 ──
-    const panelX = 7.1;
-    const panelY = 0.75;
-    const panelW = 2.7;
-    const panelH = 4.6;
-
-    // 설명 패널 배경
+    const panelX = 7.1, panelY = 0.75, panelW = 2.7, panelH = 4.6;
     slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
       x: panelX, y: panelY, w: panelW, h: panelH,
       fill: { color: NAVY.white },
@@ -1038,62 +1324,84 @@ function exportToPPTX(title, steps) {
     // 설명 헤더
     slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
       x: panelX, y: panelY, w: panelW, h: 0.45,
-      fill: { color: NAVY.main },
-      rectRadius: 0.08
+      fill: { color: NAVY.main }, rectRadius: 0.08
     });
-    // 하단 모서리 채우기 (헤더 아래 직각 처리)
     slide.addShape(pptx.shapes.RECTANGLE, {
       x: panelX, y: panelY + 0.3, w: panelW, h: 0.15,
       fill: { color: NAVY.main }
     });
-
     slide.addText('설명', {
       x: panelX, y: panelY, w: panelW, h: 0.45,
-      fontSize: 11, fontFace: FONT,
+      fontSize: 7, fontFace: FONT,
       color: NAVY.white, align: 'center', bold: true, valign: 'middle'
     });
 
-    // 마커별 설명 텍스트
-    const markers = step.markers || [];
-    let descTextY = panelY + 0.55;
+    // 마커별 설명
+    const descTextY = panelY + 0.55;
     const descTextH = panelH - 0.55 - 0.15;
 
-    if (markers.length > 0) {
-      // 마커별 설명을 번호 리스트로 표시
-      const rowH = Math.min(0.38, descTextH / markers.length);
-      markers.forEach((m, mi) => {
-        const y = descTextY + mi * rowH;
-        // 번호 원
+    if (markersSlice.length > 0) {
+      const rowH = Math.min(0.38, descTextH / markersSlice.length);
+      markersSlice.forEach((item) => {
+        const y = descTextY + item.displayIndex * rowH;
+        const numStr = String(item.number);
+        // 번호 원: 2자리 이상이면 가로를 넓힌 타원
+        const badgeW = numStr.length >= 2 ? 0.32 : 0.22;
+        const badgeH = 0.22;
         slide.addShape(pptx.shapes.OVAL, {
-          x: panelX + 0.15, y: y + 0.06,
-          w: 0.22, h: 0.22,
+          x: panelX + 0.12, y: y + 0.06,
+          w: badgeW, h: badgeH,
           fill: { color: 'E63232' }
         });
-        slide.addText(String(mi + 1), {
-          x: panelX + 0.15, y: y + 0.06,
-          w: 0.22, h: 0.22,
-          fontSize: 8, fontFace: FONT,
+        slide.addText(numStr, {
+          x: panelX + 0.12, y: y + 0.06,
+          w: badgeW, h: badgeH,
+          fontSize: 7, fontFace: FONT,
           color: NAVY.white, align: 'center', valign: 'middle', bold: true
         });
         // 설명 텍스트
-        slide.addText(m.description || '', {
-          x: panelX + 0.45, y: y + 0.02,
-          w: panelW - 0.6, h: rowH - 0.04,
-          fontSize: 9, fontFace: FONT,
+        const textX = panelX + 0.12 + badgeW + 0.06;
+        slide.addText(item.desc, {
+          x: textX, y: y + 0.02,
+          w: panelW - (textX - panelX) - 0.1, h: rowH - 0.04,
+          fontSize: 7, fontFace: FONT,
           color: NAVY.text, valign: 'middle',
           shrinkText: true, wrap: true
         });
       });
     } else {
-      const desc = step.description || '(설명 없음)';
-      slide.addText(desc, {
+      slide.addText(step.description || '(설명 없음)', {
         x: panelX + 0.2, y: descTextY,
         w: panelW - 0.4, h: descTextH,
-        fontSize: 11, fontFace: FONT,
+        fontSize: 7, fontFace: FONT,
         color: NAVY.text, valign: 'top',
         lineSpacingMultiple: 1.5,
         shrinkText: true, wrap: true
       });
+    }
+  }
+
+  // === 각 단계 슬라이드 (10개 초과 시 페이지 분할) ===
+  for (const step of steps) {
+    const markers = step.markers || [];
+    if (markers.length === 0) {
+      addStepSlide(pptx, step, [], '');
+    } else {
+      const totalPages = Math.ceil(markers.length / MARKERS_PER_PAGE);
+      for (let page = 0; page < totalPages; page++) {
+        const start = page * MARKERS_PER_PAGE;
+        const end = Math.min(start + MARKERS_PER_PAGE, markers.length);
+        const slice = [];
+        for (let mi = start; mi < end; mi++) {
+          slice.push({
+            number: mi + 1,
+            desc: markers[mi].description || '',
+            displayIndex: mi - start
+          });
+        }
+        const pageLabel = totalPages > 1 ? ` (${page + 1}/${totalPages})` : '';
+        addStepSlide(pptx, step, slice, pageLabel);
+      }
     }
   }
 

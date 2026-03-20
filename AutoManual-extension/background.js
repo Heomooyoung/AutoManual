@@ -51,15 +51,26 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 
 // 메시지 수신 처리
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // 이어서 녹화 (기존 steps 유지)
   if (message.type === 'START_RECORDING') {
     isRecording = true;
-    steps = [];
-    globalClickNumber = 0;
-    persistSteps();
+    // steps는 유지, globalClickNumber도 이어감
     chrome.action.setBadgeText({ text: 'REC' });
     chrome.action.setBadgeBackgroundColor({ color: '#FF0000' });
     broadcastToAllTabs(true);
-    sendResponse({ success: true, isRecording: true });
+    sendResponse({ success: true, isRecording: true, steps });
+    return true;
+  }
+
+  // 신규 녹화 (초기화)
+  if (message.type === 'NEW_RECORDING') {
+    isRecording = false;
+    steps = [];
+    globalClickNumber = 0;
+    persistStepsNow();
+    chrome.action.setBadgeText({ text: '' });
+    broadcastToAllTabs(false);
+    sendResponse({ success: true, steps: [] });
     return true;
   }
 
@@ -97,6 +108,67 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // 일괄 삭제
+  if (message.type === 'DELETE_STEPS_MULTI') {
+    const indices = new Set(message.indices || []);
+    steps = steps.filter((_, i) => !indices.has(i));
+    steps.forEach((s, i) => s.stepNumber = i + 1);
+    persistSteps();
+    sendResponse({ success: true, steps });
+    return true;
+  }
+
+  // 수동 캡처 (클릭 없이 현재 화면 캡처)
+  if (message.type === 'MANUAL_CAPTURE') {
+    if (!isRecording) {
+      sendResponse({ captured: false, error: '녹화 중이 아닙니다' });
+      return true;
+    }
+
+    chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+      if (!tabs[0]) {
+        sendResponse({ captured: false, error: '활성 탭을 찾을 수 없습니다' });
+        return;
+      }
+      const tab = tabs[0];
+      chrome.tabs.captureVisibleTab(tab.windowId, {
+        format: 'jpeg',
+        quality: 80
+      }).then((dataUrl) => {
+        const stepNumber = steps.length + 1;
+        const step = {
+          stepNumber,
+          screenshot: dataUrl,
+          screenshotWithMarker: dataUrl,
+          pageUrl: tab.url || '',
+          pageTitle: tab.title || '',
+          tabUrl: tab.url || '',
+          clickX: 0,
+          clickY: 0,
+          elementRect: null,
+          element: { tag: '', text: '' },
+          viewport: { width: tab.width || 1920, height: tab.height || 1080, devicePixelRatio: 1 },
+          description: '',
+          timestamp: Date.now(),
+          markers: []
+        };
+        steps.push(step);
+        persistSteps();
+
+        chrome.runtime.sendMessage({
+          type: 'NEW_STEP',
+          step: step
+        }).catch(() => {});
+
+        sendResponse({ captured: true, stepNumber });
+      }).catch((err) => {
+        console.error('수동 캡처 실패:', err);
+        sendResponse({ captured: false, error: err.message });
+      });
+    });
+    return true;
+  }
+
   if (message.type === 'UPDATE_DESCRIPTION') {
     if (steps[message.index]) {
       steps[message.index].description = message.description;
@@ -119,6 +191,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       persistSteps();
     }
     sendResponse({ success: true });
+    return true;
+  }
+
+  // 마커 순서 변경 (드래그 앤 드롭)
+  if (message.type === 'REORDER_MARKERS') {
+    const step = steps[message.stepIndex];
+    if (step?.markers && message.newOrder) {
+      // newOrder는 새 인덱스 배열 (예: [2, 0, 1])
+      const reordered = message.newOrder.map(i => step.markers[i]);
+      // 번호 재정렬 (1, 2, 3...)
+      reordered.forEach((m, i) => m.number = i + 1);
+      step.markers = reordered;
+      // 설명 갱신
+      step.description = step.markers
+        .map((m, i) => `${i + 1}. ${m.description || ''}`)
+        .filter(d => d.length > 3)
+        .join('\n');
+      // 이미지 재생성 (마커 번호가 바뀌었으므로)
+      regenerateMarkedImage(step).then(() => {
+        persistStepsNow();
+        sendResponse({ success: true, step });
+      });
+    } else {
+      sendResponse({ success: false });
+    }
     return true;
   }
 
@@ -192,6 +289,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // 편집기 저장 완료 알림 (사이드 패널이 수신)
   if (message.type === 'EDITOR_SAVED') {
     sendResponse({ success: true });
+    return true;
+  }
+
+  // ─── 파일에서 steps 불러오기 ───
+  if (message.type === 'LOAD_FILE_STEPS') {
+    steps = message.steps || [];
+    steps.forEach((s, i) => s.stepNumber = i + 1);
+    persistStepsNow();
+    sendResponse({ success: true, steps });
     return true;
   }
 
@@ -696,10 +802,25 @@ async function addMultipleMarkers(dataUrl, markers, viewport) {
 function broadcastToAllTabs(recording) {
   chrome.tabs.query({}, (tabs) => {
     for (const tab of tabs) {
+      // chrome:// , edge:// 등 내부 페이지는 스킵
+      if (!tab.url || tab.url.startsWith('chrome') || tab.url.startsWith('edge') || tab.url.startsWith('about')) continue;
+
       chrome.tabs.sendMessage(tab.id, {
         type: 'RECORDING_STATE_CHANGED',
         isRecording: recording
-      }).catch(() => {});
+      }).catch(() => {
+        // 메시지 전송 실패 → content script가 없는 탭 → 주입 후 재전송
+        chrome.scripting.executeScript({
+          target: { tabId: tab.id, allFrames: true },
+          files: ['content.js']
+        }).then(() => {
+          // 주입 후 녹화 상태 전달
+          chrome.tabs.sendMessage(tab.id, {
+            type: 'RECORDING_STATE_CHANGED',
+            isRecording: recording
+          }).catch(() => {});
+        }).catch(() => {});
+      });
     }
   });
 }

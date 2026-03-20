@@ -82,13 +82,23 @@ const toolHints = {
   select: '마커를 클릭하여 선택 → 드래그로 이동 / Delete로 삭제'
 };
 
-// ── 초기 로드 ──
-chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
-  if (!response?.steps?.[stepIndex]) {
-    hintEl.textContent = '데이터를 불러올 수 없습니다.';
-    return;
-  }
-  const step = response.steps[stepIndex];
+// ── 초기 로드 (서비스워커 대기 후 재시도) ──
+function initLoad(retries) {
+  chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
+    if (chrome.runtime.lastError || !response?.steps?.[stepIndex]) {
+      if (retries > 0) {
+        setTimeout(() => initLoad(retries - 1), 300);
+      } else {
+        hintEl.textContent = '데이터를 불러올 수 없습니다.';
+      }
+      return;
+    }
+    onStepLoaded(response.steps[stepIndex]);
+  });
+}
+initLoad(3);
+
+function onStepLoaded(step) {
   bgDataUrl = step.screenshot;
   viewport = step.viewport || { width: 1920, height: 1080 };
 
@@ -152,7 +162,7 @@ chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
     renderDescList();
   };
   img.src = bgDataUrl;
-});
+}
 
 // ── 도구 선택 ──
 document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
@@ -951,6 +961,8 @@ function renumber() {
 // ══════════════════════════════════════
 // 설명 목록
 // ══════════════════════════════════════
+let descDragFrom = null;
+
 function renderDescList() {
   descList.innerHTML = '';
   if (annotations.length === 0) {
@@ -961,9 +973,60 @@ function renderDescList() {
   annotations.forEach((ann, i) => {
     const item = document.createElement('div');
     item.className = 'desc-item' + (selectedIndex === i ? ' desc-item-selected' : '');
+    item.draggable = true;
+    item.dataset.descIndex = i;
+
+    // 드래그 순서 변경
+    item.addEventListener('dragstart', (e) => {
+      descDragFrom = i;
+      item.classList.add('desc-dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', i);
+    });
+    item.addEventListener('dragend', () => {
+      item.classList.remove('desc-dragging');
+      descList.querySelectorAll('.desc-dragover').forEach(el => el.classList.remove('desc-dragover'));
+      descDragFrom = null;
+    });
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (descDragFrom !== null && descDragFrom !== i) {
+        item.classList.add('desc-dragover');
+      }
+    });
+    item.addEventListener('dragleave', () => item.classList.remove('desc-dragover'));
+    item.addEventListener('drop', (e) => {
+      e.preventDefault();
+      item.classList.remove('desc-dragover');
+      if (descDragFrom !== null && descDragFrom !== i) {
+        saveUndoState();
+        const [moved] = annotations.splice(descDragFrom, 1);
+        annotations.splice(i, 0, moved);
+        renumber();
+        if (selectedIndex === descDragFrom) selectedIndex = i;
+        else if (selectedIndex > descDragFrom && selectedIndex <= i) selectedIndex--;
+        else if (selectedIndex < descDragFrom && selectedIndex >= i) selectedIndex++;
+        render();
+        renderDescList();
+        // 피드백: 이동된 항목 하이라이트
+        setTimeout(() => {
+          const items = descList.querySelectorAll('.desc-item');
+          if (items[i]) {
+            items[i].classList.add('desc-just-moved');
+            setTimeout(() => items[i].classList.remove('desc-just-moved'), 1500);
+          }
+        }, 50);
+      }
+    });
 
     const header = document.createElement('div');
     header.className = 'desc-item-header';
+
+    const dragHandle = document.createElement('span');
+    dragHandle.className = 'desc-drag-handle';
+    dragHandle.textContent = '⠿';
+    dragHandle.title = '드래그하여 순서 변경';
 
     const badge = document.createElement('span');
     badge.className = 'desc-badge';
@@ -1002,6 +1065,7 @@ function renderDescList() {
       renderDescList();
     });
 
+    header.appendChild(dragHandle);
     header.appendChild(badge);
     header.appendChild(typeLbl);
     header.appendChild(selectBtn);
@@ -1027,7 +1091,7 @@ document.getElementById('saveBtn').addEventListener('click', () => {
   if (activeTextInput) commitInlineText();
   selectedIndex = -1;
 
-  if (!confirm('최종 저장하시겠습니까? 저장 후 편집기가 닫힙니다.')) return;
+  // 바로 저장
 
   const invScale = 1 / imgScale;
 

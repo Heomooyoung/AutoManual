@@ -92,7 +92,7 @@ body {
   border: none;
 }
 
-/* 단계 카드: 좌측 캡처 + 우측 설명 */
+/* ── 단계 카드 ── */
 .step {
   display: flex;
   background: #ffffff;
@@ -116,19 +116,22 @@ body {
   flex-direction: column;
 }
 
+/* ── Step 헤더 바 (연한 하늘색, 한 줄) ── */
 .step-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
-  background: #f9f9fb;
-  border-bottom: 0.5px solid #e5e5ea;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: rgba(0, 122, 255, 0.08);
+  border-bottom: 1px solid rgba(0, 122, 255, 0.12);
 }
 
 .step-header-left {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex: 1;
+  min-width: 0;
 }
 
 .step-num {
@@ -138,40 +141,53 @@ body {
   background: #007aff;
   padding: 4px 14px;
   border-radius: 20px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .step-url {
   font-size: 12px;
-  color: #8e8e93;
+  color: #3c6eb0;
   font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .step-header-actions {
   display: flex;
+  align-items: center;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .step-header-actions button {
-  background: rgba(120, 120, 128, 0.08);
-  border: none;
-  color: #8e8e93;
-  font-size: 14px;
-  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(0, 122, 255, 0.15);
+  color: #555555;
+  font-size: 12px;
+  padding: 4px 10px;
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.15s;
+  font-family: inherit;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .step-header-actions button:hover {
-  background: rgba(120, 120, 128, 0.16);
+  background: #ffffff;
   color: #000000;
+  border-color: #007aff;
 }
 
 .step-header-actions .del-btn:hover {
-  background: rgba(255, 59, 48, 0.1);
+  background: rgba(255, 59, 48, 0.08);
   color: #ff3b30;
+  border-color: rgba(255, 59, 48, 0.3);
 }
 
+/* ── 스크린샷 ── */
 .step-left img {
   width: 100%;
   display: block;
@@ -182,27 +198,27 @@ body {
   opacity: 0.97;
 }
 
-/* 우측 설명 패널 */
+/* ── 우측 설명 패널 (연한 라벤더) ── */
 .step-right {
   flex: 3;
   min-width: 240px;
   max-width: 360px;
-  background: #f9f9fb;
-  border-left: 0.5px solid #e5e5ea;
+  background: #f5f3fa;
+  border-left: 1px solid #e5e5ea;
   display: flex;
   flex-direction: column;
 }
 
 .step-right-header {
-  padding: 12px 14px;
-  background: #ffffff;
-  border-bottom: 0.5px solid #e5e5ea;
+  padding: 10px 14px;
+  background: #ebe8f5;
+  border-bottom: 1px solid #ddd8ee;
   font-size: 13px;
   font-weight: 700;
-  color: #000000;
+  color: #5a4a8a;
   text-align: center;
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
 }
 
@@ -227,17 +243,56 @@ body {
   transform: scale(0.96);
 }
 
-/* 마커별 설명 행 */
+/* ── 마커별 설명 행 ── */
 .step-marker-row {
   display: flex;
   align-items: flex-start;
   gap: 10px;
   padding: 12px 14px;
-  border-bottom: 0.5px solid #e5e5ea;
+  border-bottom: 0.5px solid #e5e0f0;
+  cursor: grab;
+  transition: background 0.15s, opacity 0.2s, box-shadow 0.2s;
+}
+
+.step-marker-row:active {
+  cursor: grabbing;
 }
 
 .step-marker-row:last-child {
   border-bottom: none;
+}
+
+.step-marker-row.marker-dragging {
+  opacity: 0.35;
+  background: #f0ecfa;
+}
+
+.step-marker-row.marker-dragover {
+  background: rgba(0, 122, 255, 0.08);
+  box-shadow: inset 0 -2px 0 #007aff;
+}
+
+.step-marker-row.marker-just-moved {
+  background: rgba(0, 122, 255, 0.12);
+  animation: marker-moved-flash 1.5s ease;
+}
+
+@keyframes marker-moved-flash {
+  0% { background: rgba(0, 122, 255, 0.25); }
+  100% { background: transparent; }
+}
+
+.marker-drag-handle {
+  font-size: 14px;
+  color: #c7c7cc;
+  cursor: grab;
+  user-select: none;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.step-marker-row:hover .marker-drag-handle {
+  color: #8e8e93;
 }
 
 .marker-row-left {
@@ -282,17 +337,10 @@ body {
   min-width: 0;
 }
 
-.marker-el-tag {
-  font-size: 11px;
-  color: #8e8e93;
-  margin-bottom: 4px;
-  font-weight: 500;
-}
-
 /* 편집 가능한 텍스트 영역 */
 .marker-desc-edit {
   width: 100%;
-  border: none;
+  border: 1px solid #e5e0f0;
   border-radius: 10px;
   padding: 10px 12px;
   font-size: 14px;
@@ -306,8 +354,9 @@ body {
 }
 
 .marker-desc-edit:focus {
-  background: #f2f2f7;
-  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
+  background: #ffffff;
+  border-color: #007aff;
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.12);
 }
 
 /* 읽기 전용 텍스트 */
@@ -370,9 +419,9 @@ body {
 
 /* 변경 요약 바 */
 .step-change-banner {
-  padding: 10px 18px;
+  padding: 8px 18px;
   background: rgba(175, 82, 222, 0.08);
-  border-bottom: none;
+  border-bottom: 1px solid rgba(175, 82, 222, 0.15);
   border-left: 4px solid #af52de;
   font-size: 13px;
   color: #af52de;
@@ -454,6 +503,6 @@ body {
   .step-right {
     max-width: none;
     border-left: none;
-    border-top: 0.5px solid #e5e5ea;
+    border-top: 1px solid #e5e5ea;
   }
 }
