@@ -628,15 +628,6 @@ function addStepCard(step) {
   reRecBtn.title = '재녹화';
   reRecBtn.addEventListener('click', (e) => { e.stopPropagation(); startReRecord(stepIndex); });
 
-  const editBtn = document.createElement('button');
-  editBtn.textContent = '✏️';
-  editBtn.title = '편집기';
-  editBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const editorUrl = chrome.runtime.getURL('editor/editor.html') + '?step=' + stepIndex;
-    chrome.tabs.create({ url: editorUrl });
-  });
-
   const upBtn = document.createElement('button');
   upBtn.textContent = '↑';
   upBtn.title = '위로';

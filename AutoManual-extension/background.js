@@ -233,6 +233,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .join('\n');
       // 이미지 재생성
       regenerateMarkedImage(step).then(() => {
+        persistSteps();
         sendResponse({ success: true, step });
       });
     } else {
@@ -257,6 +258,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       // 이미지 재생성
       regenerateMarkedImage(step).then(() => {
+        persistSteps();
         sendResponse({ success: true, step });
       });
     } else {
