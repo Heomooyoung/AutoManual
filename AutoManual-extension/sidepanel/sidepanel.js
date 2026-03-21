@@ -5,6 +5,8 @@
 
 const recordBtn = document.getElementById('recordBtn');
 const recordBtnText = document.getElementById('recordBtnText');
+const cancelRecordBtn = document.getElementById('cancelRecordBtn');
+const completeRecordBtn = document.getElementById('completeRecordBtn');
 const stepCount = document.getElementById('stepCount');
 const stepList = document.getElementById('stepList');
 const emptyState = document.getElementById('emptyState');
@@ -17,6 +19,9 @@ const modePerPage = document.getElementById('modePerPage');
 // modeHint는 compact UI에서 제거됨
 
 let isRecording = false;
+let isPaused = false; // 일시정지 상태
+let isCompleted = false; // 완료 상태 (녹화 종료됨)
+let lastSavedFilename = null; // 마지막 저장 파일명 (덮어쓰기용)
 let reRecordStepIndex = null; // 재녹화 중인 단계 인덱스
 let selectMode = false;
 let selectedIndices = new Set();
@@ -33,58 +38,80 @@ const reRecordCancel = document.getElementById('reRecordCancel');
 const reRecordFinish = document.getElementById('reRecordFinish');
 const reRecordThumbs = document.getElementById('reRecordThumbs');
 
+function sanitizeFilename(name) {
+  return name.replace(/[\/\\:*?"<>|]/g, '_').trim() || 'untitled';
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+}
+
+// 서비스워커 슬립 대응 — 재시도 sendMessage
+// expectData: true이면 빈 응답도 재시도 (세부편집/저장/내보내기용)
+function sendMsgRetry(msg, retries, expectData) {
+  if (retries === undefined) retries = 5;
+  if (expectData === undefined) expectData = true;
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(msg, (response) => {
+      if (chrome.runtime.lastError || response === undefined) {
+        // SW 아직 안 깨어남
+        if (retries > 0) {
+          setTimeout(() => sendMsgRetry(msg, retries - 1, expectData).then(resolve), 400);
+        } else {
+          resolve(null);
+        }
+      } else if (expectData && msg.type === 'GET_STEPS' && (!response.steps || response.steps.length === 0)) {
+        // SW 깨어났지만 storage에서 아직 복구 안 됨
+        if (retries > 0) {
+          setTimeout(() => sendMsgRetry(msg, retries - 1, expectData).then(resolve), 400);
+        } else {
+          resolve(response);
+        }
+      } else {
+        resolve(response);
+      }
+    });
+  });
+}
+
 saveManualBtn.addEventListener('click', async () => {
   const title = document.getElementById('manualTitle').value || '제목 없음';
-  const stepsRes = await new Promise(r => chrome.runtime.sendMessage({ type: 'GET_STEPS' }, r));
+  const stepsRes = await sendMsgRetry({ type: 'GET_STEPS' });
   if (!stepsRes?.steps?.length) {
     alert('저장할 단계가 없습니다.');
     return;
   }
 
-  // 파일로 저장 (폴더/파일명 선택)
-  try {
-    const saveData = {
-      title,
-      savedAt: Date.now(),
-      stepCount: stepsRes.steps.length,
-      steps: stepsRes.steps
-    };
-    const json = JSON.stringify(saveData);
-    const blob = new Blob([json], { type: 'application/json' });
+  const saveData = {
+    title,
+    savedAt: Date.now(),
+    stepCount: stepsRes.steps.length,
+    steps: stepsRes.steps
+  };
+  const json = JSON.stringify(saveData);
+  const blob = new Blob([json], { type: 'application/json' });
+  const dataUrl = await blobToDataUrl(blob);
+  const filename = lastSavedFilename || `${sanitizeFilename(title)}.json`;
 
-    if (typeof showSaveFilePicker === 'function') {
-      // 파일 선택 다이얼로그
-      const handle = await showSaveFilePicker({
-        suggestedName: `${title}.json`,
-        types: [{
-          description: 'AutoManual 파일',
-          accept: { 'application/json': ['.json'] }
-        }]
-      });
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      alert(`"${title}" 매뉴얼이 파일로 저장되었습니다.`);
+  chrome.downloads.download({
+    url: dataUrl,
+    filename: filename,
+    conflictAction: 'overwrite',
+    saveAs: false
+  }, (downloadId) => {
+    if (chrome.runtime.lastError) {
+      alert('저장에 실패했습니다: ' + chrome.runtime.lastError.message);
     } else {
-      // 폴백: 다운로드 방식
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${title}.json`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      lastSavedFilename = filename;
     }
+  });
 
-    // 내부 저장도 병행
-    chrome.runtime.sendMessage({ type: 'SAVE_MANUAL', title });
-  } catch (err) {
-    if (err.name !== 'AbortError') {
-      console.error('저장 실패:', err);
-      alert('파일 저장에 실패했습니다.');
-    }
-  }
+  // 내부 저장도 병행
+  chrome.runtime.sendMessage({ type: 'SAVE_MANUAL', title });
 });
 
 loadManualBtn.addEventListener('click', () => {
@@ -292,9 +319,19 @@ function setMode(mode) {
 const captureBtn = document.getElementById('captureBtn');
 
 // ─── 초기화 ───
-chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
+sendMsgRetry({ type: 'GET_STATUS' }, 5, false).then((response) => {
   if (response) {
     isRecording = response.isRecording;
+    // 녹화 중이 아니면서 스텝이 있으면 → 완료 상태로 복구 (편집 가능)
+    if (!isRecording && response.stepCount > 0) {
+      isCompleted = true;
+      isPaused = false;
+    }
+    // 캡처 모드 UI 동기화
+    if (response.captureMode) {
+      modePerClick.classList.toggle('active', response.captureMode === 'per-click');
+      modePerPage.classList.toggle('active', response.captureMode === 'per-page');
+    }
     updateRecordButton();
     if (response.stepCount > 0) {
       loadSteps();
@@ -383,46 +420,117 @@ function updateSelectVisuals() {
   });
 }
 
-// ─── 녹화 시작/중지 ───
-// background.js가 모든 탭에 녹화 상태를 직접 전파하므로
-// sidepanel에서는 UI만 업데이트
+// ─── 녹화 시작/일시정지/재개 ───
 recordBtn.addEventListener('click', () => {
-  if (!isRecording) {
+  if (!isRecording && !isPaused) {
+    // 녹화 시작 (완료/초기 상태)
     const titleVal = document.getElementById('manualTitle').value.trim();
     if (!titleVal) {
       alert('매뉴얼 제목을 입력해주세요.');
       document.getElementById('manualTitle').focus();
       return;
     }
-    // 이어서 녹화 (기존 steps 유지)
+    // 완료 상태에서 다시 시작 → 기존 데이터 삭제 경고
+    if (isCompleted) {
+      if (!confirm('저장하지 않은 캡처는 삭제됩니다.\n새로 녹화를 시작하시겠습니까?')) return;
+      chrome.runtime.sendMessage({ type: 'NEW_RECORDING' }, () => {
+        clearStepList();
+        isCompleted = false;
+        chrome.runtime.sendMessage({ type: 'START_RECORDING' }, (response) => {
+          if (response?.success) {
+            isRecording = true;
+            isPaused = false;
+            lastSavedFilename = null;
+            updateRecordButton();
+          }
+        });
+      });
+      return;
+    }
+    // 최초 녹화 시작
     chrome.runtime.sendMessage({ type: 'START_RECORDING' }, (response) => {
       if (response?.success) {
         isRecording = true;
+        isPaused = false;
+        isCompleted = false;
         updateRecordButton();
-        // 기존 스텝이 있으면 유지, 없으면 빈 상태
+      }
+    });
+  } else if (isRecording && !isPaused) {
+    // 녹화 중 → 일시정지
+    chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }, (response) => {
+      if (response?.success) {
+        isRecording = false;
+        isPaused = true;
+        updateRecordButton();
+      }
+    });
+  } else if (isPaused) {
+    // 일시정지 → 재개
+    chrome.runtime.sendMessage({ type: 'START_RECORDING' }, (response) => {
+      if (response?.success) {
+        isRecording = true;
+        isPaused = false;
+        updateRecordButton();
         if (response.steps?.length > 0) {
           refreshStepList(response.steps);
         }
       }
     });
-  } else {
-    chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }, (response) => {
-      if (response?.success) {
-        isRecording = false;
-        updateRecordButton();
-      }
-    });
   }
 });
+
+// ─── 취소 버튼 ───
+cancelRecordBtn.addEventListener('click', () => {
+  if (!confirm('취소하면 모든 캡처가 사라집니다.\n정말 취소하시겠습니까?')) return;
+  chrome.runtime.sendMessage({ type: 'NEW_RECORDING' }, (response) => {
+    if (response?.success) {
+      isRecording = false;
+      isPaused = false;
+      isCompleted = false;
+      updateRecordButton();
+      clearStepList();
+      document.getElementById('manualTitle').value = '';
+      document.getElementById('manualTitle').focus();
+    }
+  });
+});
+
+// ─── 완료 버튼 (녹화 종료 + 오버레이 안내) ───
+completeRecordBtn.addEventListener('click', async () => {
+  if (isRecording) {
+    await new Promise(r => chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }, r));
+  }
+  isRecording = false;
+  isPaused = false;
+  isCompleted = true;
+  updateRecordButton();
+  showCompleteOverlay();
+});
+
+function showCompleteOverlay() {
+  const overlay = document.createElement('div');
+  overlay.className = 'complete-overlay';
+  overlay.innerHTML = `
+    <div class="complete-overlay-box">
+      <div class="complete-overlay-icon">✔</div>
+      <div class="complete-overlay-title">녹화 완료</div>
+      <div class="complete-overlay-msg">💾 저장 버튼을 눌러 저장하시기 바랍니다.</div>
+      <button class="complete-overlay-close">확인</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelector('.complete-overlay-close').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+}
 
 // ─── 신규 녹화 버튼 ───
 const newManualBtn = document.getElementById('newManualBtn');
 newManualBtn.addEventListener('click', () => {
   if (isRecording) {
-    alert('녹화 중에는 신규를 시작할 수 없습니다. 먼저 녹화를 중지하세요.');
+    alert('녹화 중에는 신규를 시작할 수 없습니다. 먼저 일시정지하세요.');
     return;
   }
-  // 현재 스텝이 있는지 확인
   const hasSteps = stepList.querySelectorAll('.step-thumb-card').length > 0;
   if (hasSteps) {
     if (!confirm('저장하지 않으면 현재 작업 내용이 모두 삭제됩니다.\n신규로 시작하시겠습니까?')) return;
@@ -430,6 +538,9 @@ newManualBtn.addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'NEW_RECORDING' }, (response) => {
     if (response?.success) {
       isRecording = false;
+      isPaused = false;
+      isCompleted = false;
+      lastSavedFilename = null;
       updateRecordButton();
       clearStepList();
       document.getElementById('manualTitle').value = '';
@@ -439,19 +550,69 @@ newManualBtn.addEventListener('click', () => {
 });
 
 function updateRecordButton() {
+  const cancelBtn = cancelRecordBtn;
+  const completeBtn = completeRecordBtn;
+  const dot = recordBtn.querySelector('.record-dot');
+
   if (isRecording) {
+    // 녹화 중 → 일시정지 버튼으로 표시
     recordBtn.classList.add('recording');
-    recordBtnText.textContent = '녹화 중지';
+    recordBtn.classList.remove('paused');
+    recordBtnText.textContent = '정지';
+    if (dot) { dot.textContent = '⏸'; dot.classList.add('pause-icon'); }
     captureBtn.disabled = false;
-  } else {
+    captureBtn.style.display = '';
+    cancelBtn.style.display = '';
+    completeBtn.style.display = '';
+    // 녹화 중 편집 잠금
+    setEditingLocked(true);
+  } else if (isPaused) {
+    // 일시정지 → 재개 버튼으로 표시
     recordBtn.classList.remove('recording');
-    recordBtnText.textContent = '녹화 시작';
+    recordBtn.classList.add('paused');
+    recordBtnText.textContent = '재개';
+    if (dot) { dot.textContent = '▶'; dot.classList.remove('pause-icon'); dot.classList.add('play-icon'); }
     captureBtn.disabled = true;
+    captureBtn.style.display = 'none';
+    cancelBtn.style.display = '';
+    completeBtn.style.display = '';
+    // 정지 시 편집 잠금 해제
+    setEditingLocked(false);
+  } else {
+    // 초기 상태 → 녹화 시작
+    recordBtn.classList.remove('recording', 'paused');
+    recordBtnText.textContent = '녹화 시작';
+    if (dot) { dot.textContent = ''; dot.classList.remove('pause-icon', 'play-icon'); }
+    captureBtn.disabled = true;
+    captureBtn.style.display = 'none';
+    cancelBtn.style.display = 'none';
+    completeBtn.style.display = 'none';
+    // 완료 시 편집 잠금 해제
+    setEditingLocked(false);
   }
 }
 
+function setEditingLocked(locked) {
+  // 하단 바 전체 (세부편집 + Export)
+  bottomBar.style.pointerEvents = locked ? 'none' : '';
+  bottomBar.style.opacity = locked ? '0.4' : '';
+  // 썸네일 액션 버튼 + 드래그
+  stepList.classList.toggle('editing-locked', locked);
+}
+
 // ─── 새 단계 / 업데이트 수신 ───
+// 글로벌 단축키로 토글된 경우 UI 동기화
 chrome.runtime.onMessage.addListener((message) => {
+  // 글로벌 단축키 녹화 토글
+  if (message.type === 'RECORDING_TOGGLED') {
+    isRecording = message.isRecording;
+    if (isRecording) {
+      isPaused = false;
+    } else if (!isCompleted) {
+      isPaused = true;
+    }
+    updateRecordButton();
+  }
   if (message.type === 'NEW_STEP') {
     addStepCard(message.step);
     updateStepCount();
@@ -460,9 +621,10 @@ chrome.runtime.onMessage.addListener((message) => {
     // 화면당 1장 모드: 전체 목록을 새로고침하여 마커 목록도 갱신
     refreshStepListFromBg();
   }
-  // 편집기에서 저장 완료 → 사이드 패널 새로고침
+  // 편집기에서 저장 완료 → 사이드 패널 새로고침 + 잠금 해제
   if (message.type === 'EDITOR_SAVED') {
     refreshStepListFromBg();
+    if (!isRecording && !previewTabId) setEditingLocked(false);
   }
   // 재녹화 진행 (캡처 추가될 때마다)
   if (message.type === 'RE_RECORD_PROGRESS') {
@@ -521,7 +683,7 @@ function clearStepList() {
 }
 
 function loadSteps() {
-  chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
+  sendMsgRetry({ type: 'GET_STEPS' }).then((response) => {
     if (response?.steps?.length > 0) {
       emptyState.style.display = 'none';
       response.steps.forEach(addStepCard);
@@ -547,6 +709,7 @@ function addStepCard(step) {
 
   // ── 드래그 이벤트 ──
   card.addEventListener('dragstart', (e) => {
+    if (isRecording) { e.preventDefault(); return; }
     dragSrcIndex = stepIndex;
     card.classList.add('step-thumb-dragging');
     e.dataTransfer.effectAllowed = 'move';
@@ -677,7 +840,7 @@ function clearMovingHighlight() {
 
 // background에서 최신 데이터 가져와서 목록 새로고침
 function refreshStepListFromBg() {
-  chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
+  sendMsgRetry({ type: 'GET_STEPS' }).then((response) => {
     if (response?.steps) refreshStepList(response.steps);
   });
 }
@@ -718,9 +881,17 @@ function deleteStep(index) {
 
 // ─── 단계 순서 이동 ───
 function moveStep(from, to) {
-  chrome.runtime.sendMessage({ type: 'MOVE_STEP', from, to }, (response) => {
+  sendMsgRetry({ type: 'MOVE_STEP', from, to }, 3, false).then((response) => {
     if (response?.success) {
       refreshStepList(response.steps);
+      // 이동된 카드 하이라이트
+      setTimeout(() => {
+        const cards = stepList.querySelectorAll('.step-thumb-card');
+        if (cards[to]) {
+          cards[to].classList.add('step-thumb-moved');
+          setTimeout(() => cards[to].classList.remove('step-thumb-moved'), 1500);
+        }
+      }, 50);
       clearMovingHighlight();
     }
   });
@@ -755,44 +926,45 @@ function openImageFullscreen(src) {
 // ─── 미리보기 (탭 재사용) ───
 let previewTabId = null;
 
-previewBtn.addEventListener('click', () => {
-  chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
-    if (!response?.steps?.length) {
-      alert('캡처된 단계가 없습니다.');
-      return;
-    }
+previewBtn.addEventListener('click', async () => {
+  const response = await sendMsgRetry({ type: 'GET_STEPS' });
+  if (!response?.steps?.length) {
+    alert('캡처된 단계가 없습니다.');
+    return;
+  }
 
-    const title = document.getElementById('manualTitle').value || '매뉴얼';
-    const viewerUrl = chrome.runtime.getURL('viewer/viewer.html')
-      + '?title=' + encodeURIComponent(title);
+  const title = document.getElementById('manualTitle').value || '매뉴얼';
+  const viewerUrl = chrome.runtime.getURL('viewer/viewer.html')
+    + '?title=' + encodeURIComponent(title);
 
-    // 이미 열린 미리보기 탭이 있으면 재사용
-    if (previewTabId !== null) {
-      chrome.tabs.get(previewTabId, (tab) => {
-        if (chrome.runtime.lastError || !tab) {
-          // 탭이 닫혔으면 새로 열기
-          previewTabId = null;
-          openPreviewTab(viewerUrl);
-        } else {
-          // 기존 탭 업데이트 + 포커스
-          chrome.tabs.update(previewTabId, { url: viewerUrl, active: true });
-        }
-      });
-    } else {
-      openPreviewTab(viewerUrl);
-    }
-  });
+  if (previewTabId !== null) {
+    chrome.tabs.get(previewTabId, (tab) => {
+      if (chrome.runtime.lastError || !tab) {
+        previewTabId = null;
+        openPreviewTab(viewerUrl);
+      } else {
+        chrome.tabs.update(previewTabId, { url: viewerUrl, active: true });
+        setEditingLocked(true);
+      }
+    });
+  } else {
+    openPreviewTab(viewerUrl);
+  }
 });
 
 function openPreviewTab(url) {
   chrome.tabs.create({ url }, (tab) => {
     previewTabId = tab.id;
+    setEditingLocked(true);
   });
 }
 
-// 미리보기 탭이 닫히면 ID 초기화
+// 미리보기 탭이 닫히면 잠금 해제
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (tabId === previewTabId) previewTabId = null;
+  if (tabId === previewTabId) {
+    previewTabId = null;
+    if (!isRecording) setEditingLocked(false);
+  }
 });
 
 // ─── 내보내기 드롭다운 ───
@@ -817,7 +989,7 @@ exportMenu.querySelectorAll('button[data-format]').forEach((btn) => {
 
 // ─── 내보내기 실행 ───
 function exportAs(format) {
-  chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
+  sendMsgRetry({ type: 'GET_STEPS' }).then((response) => {
     if (!response?.steps?.length) {
       alert('캡처된 단계가 없습니다.');
       return;
@@ -828,12 +1000,8 @@ function exportAs(format) {
 
     if (format === 'html') {
       exportToHTML(title, steps);
-    } else if (format === 'pdf') {
-      exportToPDF(title, steps);
     } else if (format === 'pptx') {
       exportToPPTX(title, steps);
-    } else if (format === 'gif') {
-      exportToGIF(title, steps);
     } else {
       alert(`${format.toUpperCase()} 내보내기는 다음 버전에서 지원됩니다.`);
     }
@@ -842,6 +1010,7 @@ function exportAs(format) {
 
 // ─── HTML 내보내기 (좌측 캡처 + 우측 설명) ───
 function exportToHTML(title, steps) {
+  const dateStr = new Date().toLocaleDateString('ko-KR');
   const html = `<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -852,59 +1021,215 @@ function exportToHTML(title, steps) {
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: 'Malgun Gothic', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      max-width: 1100px; margin: 0 auto; padding: 40px 20px;
-      background: #e8ecf4; color: #1a1a2e;
+      background: #E8ECF4; color: #1A1A2E;
     }
-    h1 { font-size: 28px; margin-bottom: 8px; color: #1b2a4a; }
-    .meta { color: #6b7b9e; font-size: 13px; margin-bottom: 32px; }
-    .step { display: flex; background: #fff; border-radius: 12px; margin-bottom: 24px;
-            overflow: hidden; box-shadow: 0 2px 8px rgba(27,42,74,0.08); border: 1px solid #c8d1e0; }
-    .step.modified { border: 3px solid #7c3aed; box-shadow: 0 4px 20px rgba(124,58,237,0.2); }
-    .change-banner { padding: 8px 18px; background: linear-gradient(90deg, #faf5ff, #ede9fe);
-                     border-bottom: 2px solid #7c3aed; border-left: 4px solid #7c3aed;
-                     font-size: 12px; color: #6d28d9; font-weight: 600; }
-    .mod-badge { display: inline-block; font-size: 10px; font-weight: 700; color: #fff;
-                 background: #7c3aed; padding: 2px 8px; border-radius: 8px; margin-left: 6px; }
-    .step-left { flex: 7; min-width: 0; }
-    .step-header { padding: 12px 18px; background: #1b2a4a;
-                   display: flex; justify-content: space-between; align-items: center; }
-    .step-num { font-weight: 700; color: #fff; font-size: 13px;
-                background: #4a90d9; padding: 3px 12px; border-radius: 5px; }
-    .step-url { font-size: 11px; color: #6b7b9e; }
-    .step-left img { width: 100%; display: block; }
-    .step-right { flex: 3; min-width: 200px; max-width: 320px;
-                  background: #f4f6fa; border-left: 1px solid #c8d1e0;
-                  display: flex; flex-direction: column; }
-    .step-right-header { padding: 12px 16px; background: #2c3e6b;
-                         font-size: 12px; font-weight: 700; color: #fff; text-align: center; }
-    .step-desc { padding: 16px; font-size: 13px; line-height: 1.7; flex: 1; white-space: pre-wrap; }
-    .marker-row { display: flex; align-items: flex-start; gap: 10px;
-                  padding: 10px 14px; border-bottom: 1px solid #e8ecf4; }
+
+    /* ── Cover Page ── */
+    .cover {
+      background: #1B2A4A;
+      min-height: 100vh;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center;
+      padding: 40px 20px;
+      position: relative;
+    }
+    .cover-accent-line {
+      width: 100%; height: 5px;
+      background: #4A90D9;
+      position: absolute; top: 0; left: 0;
+    }
+    .cover-title {
+      font-size: 42px; font-weight: 700;
+      color: #FFFFFF;
+      margin-bottom: 24px;
+      max-width: 800px;
+      line-height: 1.3;
+    }
+    .cover-divider {
+      width: 200px; height: 3px;
+      background: #4A90D9;
+      margin: 0 auto 24px;
+    }
+    .cover-meta {
+      font-size: 16px; color: #6B7B9E;
+      margin-bottom: 60px;
+    }
+    .cover-brand {
+      font-size: 12px; color: #4A5568;
+    }
+
+    /* ── Steps Container ── */
+    .steps-container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+
+    /* ── Step Card ── */
+    .step {
+      background: #FFFFFF;
+      border-radius: 10px;
+      margin-bottom: 28px;
+      overflow: hidden;
+      box-shadow: 0 2px 10px rgba(27,42,74,0.10);
+      border: 1px solid #C8D1E0;
+    }
+    .step-top-bar {
+      display: flex;
+      background: #1B2A4A;
+    }
+    .step-body {
+      display: flex;
+      align-items: stretch;
+    }
+    .step.modified {
+      border: 3px solid #7C3AED;
+      box-shadow: 0 4px 20px rgba(124,58,237,0.2);
+    }
+
+    /* ── Change Banner (modified steps) ── */
+    .change-banner {
+      padding: 8px 18px;
+      background: linear-gradient(90deg, #faf5ff, #ede9fe);
+      border-bottom: 2px solid #7C3AED;
+      border-left: 4px solid #7C3AED;
+      font-size: 12px; color: #6D28D9; font-weight: 600;
+    }
+
+    /* ── Left: Screenshot ── */
+    .step-left { flex: 7; min-width: 0; display: flex; flex-direction: column; }
+    .step-header {
+      flex: 1;
+      padding: 12px 18px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .step-header-desc {
+      width: 320px; min-width: 200px;
+      padding: 12px 16px;
+      border-left: 1px solid rgba(255,255,255,0.1);
+      font-size: 12px; font-weight: 700;
+      color: #FFFFFF;
+      text-align: center;
+      letter-spacing: 1px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .step-badge {
+      display: inline-block;
+      font-weight: 700; color: #FFFFFF; font-size: 13px;
+      background: #4A90D9;
+      padding: 4px 14px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .mod-badge {
+      display: inline-block; font-size: 10px; font-weight: 700; color: #FFFFFF;
+      background: #7C3AED; padding: 3px 10px; border-radius: 8px; margin-left: 6px;
+    }
+    .step-page-title {
+      font-size: 12px; color: #6B7B9E;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .step-img-wrap {
+      flex: 1;
+      background: #FFFFFF;
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .step-img-card {
+      width: 100%;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      overflow: hidden;
+    }
+    .step-img-card img {
+      width: 100%; display: block;
+    }
+
+    /* ── Right: Description Panel ── */
+    .step-right {
+      flex: 3; min-width: 200px; max-width: 320px;
+      background: #F4F6FA;
+      border-left: 1px solid #C8D1E0;
+      display: flex; flex-direction: column;
+    }
+    .step-right-header {
+      display: none;
+    }
+    .step-desc {
+      padding: 16px; font-size: 13px;
+      line-height: 1.7; flex: 1;
+      white-space: pre-wrap; color: #1A1A2E;
+    }
+
+    /* ── Marker Rows ── */
+    .marker-list { flex: 1; background: #F4F6FA; }
+    .marker-row {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 10px 14px;
+      border-bottom: 1px solid #E8ECF4;
+    }
     .marker-row:last-child { border-bottom: none; }
-    .marker-badge { display: inline-flex; align-items: center; justify-content: center;
-                    min-width: 22px; height: 22px; border-radius: 50%;
-                    background: #e63232; color: #fff; font-size: 11px; font-weight: 700; flex-shrink: 0; }
-    .marker-text { font-size: 13px; line-height: 1.6; color: #1a1a2e; }
-    .footer { text-align: center; color: #6b7b9e; font-size: 12px;
-              margin-top: 40px; padding: 24px; }
+    .marker-row.odd { background: #F2F2F7; }
+    .marker-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 22px; height: 22px;
+      border-radius: 50%;
+      background: #E63232; color: #FFFFFF;
+      font-size: 11px; font-weight: 700;
+      flex-shrink: 0;
+    }
+    .marker-text {
+      font-size: 13px; line-height: 1.6; color: #1A1A2E;
+    }
+
+    /* ── Footer ── */
+    .footer {
+      text-align: center; color: #6B7B9E;
+      font-size: 12px; margin-top: 40px;
+      padding: 24px 20px;
+    }
+
+    /* ── Responsive: mobile stacking ── */
     @media (max-width: 768px) {
-      .step { flex-direction: column; }
-      .step-right { max-width: none; border-left: none; border-top: 1px solid #c8d1e0; }
+      .cover-title { font-size: 28px; }
+      .step-top-bar { flex-direction: column; }
+      .step-header-desc { width: auto; border-left: none; border-top: 1px solid rgba(255,255,255,0.1); }
+      .step-body { flex-direction: column; }
+      .step-right {
+        max-width: none;
+        border-left: none;
+        border-top: 1px solid #C8D1E0;
+      }
     }
   </style>
 </head>
 <body>
-  <h1>${escapeHtml(title)}</h1>
-  <div class="meta">작성일: ${new Date().toLocaleDateString('ko-KR')} | 총 ${steps.length}단계</div>
+
+  <!-- Cover Page -->
+  <div class="cover">
+    <div class="cover-accent-line"></div>
+    <div class="cover-title">${escapeHtml(title)}</div>
+    <div class="cover-divider"></div>
+    <div class="cover-meta">${dateStr}  |  총 ${steps.length}단계</div>
+    <div class="cover-brand">DX-AutoManual</div>
+  </div>
+
+  <!-- Steps -->
+  <div class="steps-container">
   ${steps.map(step => {
     const markers = step.markers || [];
     let descHtml;
     if (markers.length > 0) {
-      descHtml = markers.map((m, i) => `
-        <div class="marker-row">
+      descHtml = '<div class="marker-list">' + markers.map((m, i) => `
+        <div class="marker-row${i % 2 === 1 ? ' odd' : ''}">
           <span class="marker-badge">${i + 1}</span>
           <span class="marker-text">${escapeHtml(m.description || '(설명 없음)')}</span>
-        </div>`).join('');
+        </div>`).join('') + '</div>';
     } else {
       descHtml = `<div class="step-desc">${escapeHtml(step.description || '(설명 없음)')}</div>`;
     }
@@ -916,22 +1241,32 @@ function exportToHTML(title, steps) {
       ? `<div class="change-banner">${step.changeType === 're-recorded' ? '🔄' : '✏️'} ${escapeHtml(step.changeSummary)}${step.modifiedAt ? ' (' + new Date(step.modifiedAt).toLocaleString('ko-KR') + ')' : ''}</div>`
       : '';
     return `
-  <div class="step${modClass}">
-    <div class="step-left">
-      <div class="step-header">
-        <span class="step-num">Step ${step.stepNumber}${modBadge}</span>
-        <span class="step-url">${escapeHtml(step.pageTitle || '')}</span>
+    <div class="step${modClass}">
+      <div class="step-top-bar">
+        <div class="step-header">
+          <span class="step-badge">Step ${step.stepNumber}${modBadge}</span>
+          <span class="step-page-title">${escapeHtml(step.pageTitle || '')}</span>
+        </div>
+        <div class="step-header-desc">설명</div>
       </div>
       ${changeBanner}
-      <img src="${step.screenshotWithMarker}" alt="Step ${step.stepNumber}">
-    </div>
-    <div class="step-right">
-      <div class="step-right-header">설명</div>
-      ${descHtml}
-    </div>
-  </div>`;
+      <div class="step-body">
+        <div class="step-left">
+          <div class="step-img-wrap">
+            <div class="step-img-card">
+              <img src="${step.screenshotWithMarker}" alt="Step ${step.stepNumber}">
+            </div>
+          </div>
+        </div>
+        <div class="step-right">
+          ${descHtml}
+        </div>
+      </div>
+    </div>`;
   }).join('\n')}
-  <div class="footer">DX-AutoManual으로 생성됨</div>
+  </div>
+
+  <div class="footer">DX-AutoManual로 생성됨</div>
 </body>
 </html>`;
 
@@ -944,227 +1279,6 @@ function exportToHTML(title, steps) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
-}
-
-// ─── PDF 내보내기 (canvas 렌더링으로 한글 지원) ───
-function exportToPDF(title, steps) {
-  if (typeof jspdf === 'undefined') {
-    alert('PDF 라이브러리를 불러오지 못했습니다.');
-    return;
-  }
-
-  const statusEl = document.createElement('div');
-  statusEl.style.cssText = 'position:fixed;top:0;left:0;right:0;padding:12px;background:#1b2a4a;color:#fff;text-align:center;font-size:14px;z-index:99999;font-family:inherit;';
-  statusEl.textContent = 'PDF 생성 중...';
-  document.body.appendChild(statusEl);
-
-  const { jsPDF } = jspdf;
-  const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const PW = 297, PH = 210;
-  // 캔버스 해상도 (mm → px, 3x for quality)
-  const SCALE = 3;
-  const CW = PW * SCALE, CH = PH * SCALE;
-
-  // 텍스트를 canvas로 렌더링하는 헬퍼
-  function renderPageToCanvas(drawFn) {
-    const canvas = document.createElement('canvas');
-    canvas.width = CW;
-    canvas.height = CH;
-    const ctx = canvas.getContext('2d');
-    drawFn(ctx, CW, CH, SCALE);
-    return canvas.toDataURL('image/jpeg', 0.92);
-  }
-
-  // === 표지 ===
-  const coverImg = renderPageToCanvas((ctx, w, h, s) => {
-    ctx.fillStyle = '#1B2A4A';
-    ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = '#4A90D9';
-    ctx.fillRect(0, 0, w, 6 * s);
-    // 제목
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `bold ${28 * s}px "Malgun Gothic", -apple-system, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(title, w / 2, h * 0.4);
-    // 구분선
-    ctx.fillStyle = '#4A90D9';
-    ctx.fillRect(w / 2 - 90 * s, h * 0.47, 180 * s, 3 * s);
-    // 메타
-    ctx.fillStyle = '#6B7B9E';
-    ctx.font = `${12 * s}px "Malgun Gothic", sans-serif`;
-    ctx.fillText(`${new Date().toLocaleDateString('ko-KR')}  |  총 ${steps.length}단계`, w / 2, h * 0.55);
-    // 브랜딩
-    ctx.fillStyle = '#4A5568';
-    ctx.font = `${9 * s}px "Malgun Gothic", sans-serif`;
-    ctx.fillText('DX-AutoManual', w / 2, h * 0.85);
-  });
-  pdf.addImage(coverImg, 'JPEG', 0, 0, PW, PH);
-
-  // === PDF 페이지 렌더 헬퍼 (10개씩 분할) ===
-  const PDF_MARKERS_PER_PAGE = 10;
-
-  function renderStepPage(ctx, w, h, s, step, markersSlice, pageLabel, screenshotBitmap) {
-    const M = 10 * s;
-
-    ctx.fillStyle = '#E8ECF4';
-    ctx.fillRect(0, 0, w, h);
-
-    // 헤더 바
-    ctx.fillStyle = '#1B2A4A';
-    ctx.fillRect(0, 0, w, 14 * s);
-
-    // Step 배지
-    ctx.fillStyle = '#4A90D9';
-    roundRect(ctx, M, 3 * s, 28 * s, 8 * s, 4 * s);
-    ctx.fill();
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `bold ${9 * s}px "Malgun Gothic", sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(`Step ${step.stepNumber}${pageLabel}`, M + 14 * s, 7 * s);
-
-    // 페이지 제목
-    ctx.fillStyle = '#6B7B9E';
-    ctx.font = `${7 * s}px "Malgun Gothic", sans-serif`;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText((step.pageTitle || '').substring(0, 60), M + 32 * s, 7 * s);
-
-    // 스크린샷 영역
-    const imgX = M;
-    const imgY = 18 * s;
-    const imgAreaW = w * 0.68 - M;
-    const imgAreaH = h - 24 * s;
-
-    ctx.fillStyle = '#ffffff';
-    roundRect(ctx, imgX, imgY, imgAreaW, imgAreaH, 6 * s);
-    ctx.fill();
-
-    if (screenshotBitmap) {
-      const pad = 2 * s;
-      const ratio = Math.min((imgAreaW - pad * 2) / screenshotBitmap.width, (imgAreaH - pad * 2) / screenshotBitmap.height);
-      const dw = screenshotBitmap.width * ratio;
-      const dh = screenshotBitmap.height * ratio;
-      const dx = imgX + pad + (imgAreaW - pad * 2 - dw) / 2;
-      const dy = imgY + pad + (imgAreaH - pad * 2 - dh) / 2;
-      ctx.drawImage(screenshotBitmap, dx, dy, dw, dh);
-    }
-
-    // 우측 설명 패널
-    const panelX = w * 0.68 + 4 * s;
-    const panelY = 18 * s;
-    const panelW = w - panelX - M;
-    const panelH = h - 24 * s;
-
-    ctx.fillStyle = '#ffffff';
-    roundRect(ctx, panelX, panelY, panelW, panelH, 6 * s);
-    ctx.fill();
-
-    // 패널 헤더
-    ctx.fillStyle = '#2C3E6B';
-    roundRect(ctx, panelX, panelY, panelW, 10 * s, 6 * s);
-    ctx.fill();
-    ctx.fillStyle = '#2C3E6B';
-    ctx.fillRect(panelX, panelY + 6 * s, panelW, 4 * s);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `bold ${7 * s}px "Malgun Gothic", sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('설명', panelX + panelW / 2, panelY + 5.5 * s);
-
-    // 마커별 설명
-    let ty = panelY + 14 * s;
-
-    if (markersSlice.length > 0) {
-      const rowH = Math.min(14 * s, (panelH - 16 * s) / markersSlice.length);
-
-      for (let di = 0; di < markersSlice.length; di++) {
-        const item = markersSlice[di];
-        const ry = ty + di * rowH;
-        const numStr = String(item.number);
-
-        // 번호 타원 (2자리면 가로 넓게)
-        const badgeRx = numStr.length >= 2 ? 4.5 * s : 3 * s;
-        const badgeRy = 3 * s;
-        ctx.fillStyle = '#E63232';
-        ctx.beginPath();
-        ctx.ellipse(panelX + 6 * s, ry + 2 * s, badgeRx, badgeRy, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#ffffff';
-        ctx.font = `bold ${7 * s}px "Malgun Gothic", sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(numStr, panelX + 6 * s, ry + 2.2 * s);
-
-        // 설명 텍스트
-        ctx.fillStyle = '#1A1A2E';
-        ctx.font = `${7 * s}px "Malgun Gothic", sans-serif`;
-        ctx.textAlign = 'left';
-        const desc = (item.desc || '').substring(0, 45);
-        ctx.fillText(desc, panelX + (6 + badgeRx / s + 2) * s, ry + 2.5 * s);
-      }
-    } else {
-      ctx.fillStyle = '#6B7B9E';
-      ctx.font = `${7 * s}px "Malgun Gothic", sans-serif`;
-      ctx.textAlign = 'left';
-      ctx.fillText((step.description || '').substring(0, 80), panelX + 4 * s, ty + 3 * s);
-    }
-  }
-
-  // === 각 단계 (10개 초과 시 페이지 분할) ===
-  let loaded = 0;
-
-  const addStepPages = async () => {
-    for (let si = 0; si < steps.length; si++) {
-      const step = steps[si];
-      const markers = step.markers || [];
-
-      // 스크린샷 이미지 로드
-      let screenshotBitmap = null;
-      if (step.screenshotWithMarker) {
-        try {
-          const resp = await fetch(step.screenshotWithMarker);
-          const blob = await resp.blob();
-          screenshotBitmap = await createImageBitmap(blob);
-        } catch (e) { /* skip */ }
-      }
-
-      const totalPages = markers.length > 0 ? Math.ceil(markers.length / PDF_MARKERS_PER_PAGE) : 1;
-
-      for (let page = 0; page < totalPages; page++) {
-        pdf.addPage('a4', 'landscape');
-
-        const start = page * PDF_MARKERS_PER_PAGE;
-        const end = Math.min(start + PDF_MARKERS_PER_PAGE, markers.length);
-        const slice = [];
-        for (let mi = start; mi < end; mi++) {
-          slice.push({ number: mi + 1, desc: markers[mi].description || '' });
-        }
-        const pageLabel = totalPages > 1 ? ` (${page + 1}/${totalPages})` : '';
-
-        const pageImg = renderPageToCanvas((ctx, w, h, s) => {
-          renderStepPage(ctx, w, h, s, step, slice, pageLabel, screenshotBitmap);
-        });
-
-        pdf.addImage(pageImg, 'JPEG', 0, 0, PW, PH);
-      }
-
-      if (screenshotBitmap) screenshotBitmap.close();
-
-      loaded++;
-      statusEl.textContent = `PDF 생성 중... ${loaded}/${steps.length}`;
-    }
-
-    pdf.save(`${title}.pdf`);
-    statusEl.remove();
-  };
-
-  addStepPages().catch((err) => {
-    statusEl.remove();
-    console.error('PDF 생성 실패:', err);
-    alert('PDF 생성에 실패했습니다: ' + err.message);
-  });
 }
 
 // 라운드 사각형 헬퍼 (canvas용)
@@ -1240,8 +1354,41 @@ function exportToPPTX(title, steps) {
     color: '4A5568', align: 'center'
   });
 
-  // === 슬라이드 생성 헬퍼 (10개씩 페이지 분할) ===
-  const MARKERS_PER_PAGE = 10;
+  // === 슬라이드 생성 헬퍼 (텍스트 높이 기준 자동 분할) ===
+  // 설명 한 줄당 약 0.12인치, 패널 사용 가능 높이 약 3.9인치
+  const LINE_HEIGHT = 0.12; // 인치 (7pt 폰트 기준)
+  const CHARS_PER_LINE = 18; // 패널 폭 기준 한 줄 글자 수 (한글)
+  const PANEL_USABLE_H = 3.9; // 패널 설명 영역 높이 (인치)
+  const MARKER_PADDING = 0.12; // 마커 간 여백
+
+  // 마커 설명의 예상 높이 계산
+  function estimateMarkerHeight(desc) {
+    if (!desc) return LINE_HEIGHT + MARKER_PADDING;
+    const lines = Math.ceil(desc.length / CHARS_PER_LINE);
+    return Math.max(1, lines) * LINE_HEIGHT + MARKER_PADDING;
+  }
+
+  // 마커를 높이 기준으로 페이지 분할
+  function splitMarkersByHeight(markers) {
+    const pages = [];
+    let currentPage = [];
+    let currentH = 0;
+
+    for (let mi = 0; mi < markers.length; mi++) {
+      const desc = markers[mi].description || '';
+      const h = estimateMarkerHeight(desc);
+
+      if (currentPage.length > 0 && currentH + h > PANEL_USABLE_H) {
+        pages.push(currentPage);
+        currentPage = [];
+        currentH = 0;
+      }
+      currentPage.push({ number: mi + 1, desc, estH: h });
+      currentH += h;
+    }
+    if (currentPage.length > 0) pages.push(currentPage);
+    return pages;
+  }
 
   function addStepSlide(pptx, step, markersSlice, pageLabel) {
     const slide = pptx.addSlide();
@@ -1327,43 +1474,56 @@ function exportToPPTX(title, steps) {
       color: NAVY.white, align: 'center', bold: true, valign: 'middle'
     });
 
-    // 마커별 설명
-    const descTextY = panelY + 0.55;
-    const descTextH = panelH - 0.55 - 0.15;
+    // 마커별 설명 (카드 스타일 + 자동 높이)
+    let curY = panelY + 0.55;
 
     if (markersSlice.length > 0) {
-      const rowH = Math.min(0.38, descTextH / markersSlice.length);
-      markersSlice.forEach((item) => {
-        const y = descTextY + item.displayIndex * rowH;
+      const isOdd = (i) => i % 2 === 1;
+      markersSlice.forEach((item, di) => {
         const numStr = String(item.number);
-        // 번호 원: 2자리 이상이면 가로를 넓힌 타원
         const badgeW = numStr.length >= 2 ? 0.32 : 0.22;
         const badgeH = 0.22;
+        const descLines = Math.max(1, Math.ceil((item.desc || '').length / CHARS_PER_LINE));
+        const rowH = descLines * LINE_HEIGHT + MARKER_PADDING;
+
+        // 홀수행 배경색 (카드 구분)
+        if (isOdd(di)) {
+          slide.addShape(pptx.shapes.RECTANGLE, {
+            x: panelX + 0.05, y: curY - 0.02,
+            w: panelW - 0.1, h: rowH,
+            fill: { color: 'F2F2F7' }
+          });
+        }
+
+        // 번호 배지
         slide.addShape(pptx.shapes.OVAL, {
-          x: panelX + 0.12, y: y + 0.06,
+          x: panelX + 0.12, y: curY + 0.02,
           w: badgeW, h: badgeH,
           fill: { color: 'E63232' }
         });
         slide.addText(numStr, {
-          x: panelX + 0.12, y: y + 0.06,
+          x: panelX + 0.12, y: curY + 0.02,
           w: badgeW, h: badgeH,
           fontSize: 7, fontFace: FONT,
           color: NAVY.white, align: 'center', valign: 'middle', bold: true
         });
+
         // 설명 텍스트
         const textX = panelX + 0.12 + badgeW + 0.06;
-        slide.addText(item.desc, {
-          x: textX, y: y + 0.02,
+        slide.addText(item.desc || '', {
+          x: textX, y: curY,
           w: panelW - (textX - panelX) - 0.1, h: rowH - 0.04,
           fontSize: 7, fontFace: FONT,
-          color: NAVY.text, valign: 'middle',
-          shrinkText: true, wrap: true
+          color: NAVY.text, valign: 'top',
+          wrap: true, lineSpacingMultiple: 1.3
         });
+
+        curY += rowH;
       });
     } else {
       slide.addText(step.description || '(설명 없음)', {
-        x: panelX + 0.2, y: descTextY,
-        w: panelW - 0.4, h: descTextH,
+        x: panelX + 0.2, y: curY,
+        w: panelW - 0.4, h: panelH - 0.7,
         fontSize: 7, fontFace: FONT,
         color: NAVY.text, valign: 'top',
         lineSpacingMultiple: 1.5,
@@ -1372,26 +1532,16 @@ function exportToPPTX(title, steps) {
     }
   }
 
-  // === 각 단계 슬라이드 (10개 초과 시 페이지 분할) ===
+  // === 각 단계 슬라이드 (텍스트 높이 기준 자동 분할) ===
   for (const step of steps) {
     const markers = step.markers || [];
     if (markers.length === 0) {
       addStepSlide(pptx, step, [], '');
     } else {
-      const totalPages = Math.ceil(markers.length / MARKERS_PER_PAGE);
-      for (let page = 0; page < totalPages; page++) {
-        const start = page * MARKERS_PER_PAGE;
-        const end = Math.min(start + MARKERS_PER_PAGE, markers.length);
-        const slice = [];
-        for (let mi = start; mi < end; mi++) {
-          slice.push({
-            number: mi + 1,
-            desc: markers[mi].description || '',
-            displayIndex: mi - start
-          });
-        }
-        const pageLabel = totalPages > 1 ? ` (${page + 1}/${totalPages})` : '';
-        addStepSlide(pptx, step, slice, pageLabel);
+      const pages = splitMarkersByHeight(markers);
+      for (let pi = 0; pi < pages.length; pi++) {
+        const pageLabel = pages.length > 1 ? ` (${pi + 1}/${pages.length})` : '';
+        addStepSlide(pptx, step, pages[pi], pageLabel);
       }
     }
   }
@@ -1421,112 +1571,6 @@ function exportToPPTX(title, steps) {
     console.error('[DX-AutoManual] PPT 내보내기 실패:', err);
     alert('PPT 내보내기에 실패했습니다: ' + err.message);
   });
-}
-
-// ─── GIF 내보내기 ───
-function exportToGIF(title, steps) {
-  if (typeof GIF === 'undefined') {
-    alert('GIF 라이브러리를 불러오지 못했습니다.');
-    return;
-  }
-
-  const WIDTH = 800;
-  const statusEl = document.createElement('div');
-  statusEl.style.cssText = 'position:fixed;top:0;left:0;right:0;padding:12px;background:#1b2a4a;color:#fff;text-align:center;font-size:14px;z-index:99999;font-family:inherit;';
-  statusEl.textContent = 'GIF 생성 중... (0%)';
-  document.body.appendChild(statusEl);
-
-  const workerUrl = chrome.runtime.getURL('vendor/gif.worker.js');
-  const gif = new GIF({
-    workers: 2,
-    quality: 10,
-    width: WIDTH,
-    height: Math.round(WIDTH * 0.6),
-    workerScript: workerUrl
-  });
-
-  const gifH = Math.round(WIDTH * 0.6);
-  let loaded = 0;
-
-  // 각 단계의 이미지를 캔버스로 렌더링 후 프레임 추가
-  const addFrames = async () => {
-    for (const step of steps) {
-      const frameCanvas = document.createElement('canvas');
-      frameCanvas.width = WIDTH;
-      frameCanvas.height = gifH;
-      const fCtx = frameCanvas.getContext('2d');
-
-      // 배경
-      fCtx.fillStyle = '#e8ecf4';
-      fCtx.fillRect(0, 0, WIDTH, gifH);
-
-      // 상단 바
-      fCtx.fillStyle = '#1b2a4a';
-      fCtx.fillRect(0, 0, WIDTH, 36);
-      fCtx.fillStyle = '#4a90d9';
-      fCtx.font = 'bold 14px sans-serif';
-      fCtx.textBaseline = 'middle';
-      fCtx.fillText(`Step ${step.stepNumber}`, 12, 18);
-      fCtx.fillStyle = '#6b7b9e';
-      fCtx.font = '11px sans-serif';
-      fCtx.fillText(step.pageTitle || '', 100, 18);
-
-      // 스크린샷
-      await new Promise((resolve) => {
-        const img = new Image();
-        img.onerror = () => resolve(); // 로드 실패 시 스킵
-        img.onload = () => {
-          // 비율 유지하여 중앙 배치
-          const maxW = WIDTH - 20;
-          const maxH = gifH - 80;
-          const ratio = Math.min(maxW / img.width, maxH / img.height);
-          const drawW = img.width * ratio;
-          const drawH = img.height * ratio;
-          const drawX = (WIDTH - drawW) / 2;
-          const drawY = 42 + (maxH - drawH) / 2;
-
-          fCtx.drawImage(img, drawX, drawY, drawW, drawH);
-
-          // 하단 설명
-          const desc = step.description || '';
-          const shortDesc = desc.length > 60 ? desc.substring(0, 60) + '...' : desc;
-          fCtx.fillStyle = 'rgba(27,42,74,0.85)';
-          fCtx.fillRect(0, gifH - 32, WIDTH, 32);
-          fCtx.fillStyle = '#ffffff';
-          fCtx.font = '12px sans-serif';
-          fCtx.textBaseline = 'middle';
-          fCtx.fillText(shortDesc, 12, gifH - 16);
-
-          resolve();
-        };
-        img.src = step.screenshotWithMarker;
-      });
-
-      gif.addFrame(frameCanvas, { delay: 2500, copy: true });
-      loaded++;
-      statusEl.textContent = `GIF 생성 중... 프레임 ${loaded}/${steps.length}`;
-    }
-
-    gif.on('progress', (p) => {
-      statusEl.textContent = `GIF 인코딩 중... ${Math.round(p * 100)}%`;
-    });
-
-    gif.on('finished', (blob) => {
-      statusEl.remove();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${title}.gif`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    });
-
-    gif.render();
-  };
-
-  addFrames();
 }
 
 function escapeHtml(text) {

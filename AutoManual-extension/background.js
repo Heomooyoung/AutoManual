@@ -11,12 +11,18 @@ let globalClickNumber = 0;
 let reRecordTarget = null; // { stepIndex: number, newSteps: [] } — 재녹화 대상
 
 // Service Worker 재시작 시 저장된 데이터 복구
-chrome.storage.local.get(['stepsData', 'captureMode'], (result) => {
+chrome.storage.local.get(['stepsData', 'captureMode', 'isRecordingState'], (result) => {
   if (result.stepsData?.length) {
     steps = result.stepsData;
   }
   if (result.captureMode) {
     captureMode = result.captureMode;
+  }
+  if (result.isRecordingState) {
+    isRecording = true;
+    chrome.action.setBadgeText({ text: 'REC' });
+    chrome.action.setBadgeBackgroundColor({ color: '#FF0000' });
+    broadcastToAllTabs(true);
   }
 });
 
@@ -39,6 +45,27 @@ function persistStepsNow() {
 // 확장 아이콘 클릭 → 사이드 패널 열기
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
+// 글로벌 단축키 (Ctrl+Shift+E) → 녹화 토글
+chrome.commands.onCommand.addListener((command) => {
+  if (command === 'toggle-recording') {
+    if (isRecording) {
+      isRecording = false;
+      chrome.storage.local.set({ isRecordingState: false });
+      chrome.action.setBadgeText({ text: '' });
+      broadcastToAllTabs(false);
+      persistStepsNow();
+    } else {
+      isRecording = true;
+      chrome.storage.local.set({ isRecordingState: true });
+      chrome.action.setBadgeText({ text: 'REC' });
+      chrome.action.setBadgeBackgroundColor({ color: '#FF0000' });
+      broadcastToAllTabs(true);
+    }
+    // sidepanel에 상태 변경 알림
+    chrome.runtime.sendMessage({ type: 'RECORDING_TOGGLED', isRecording }).catch(() => {});
+  }
+});
+
 // 새 탭/팝업이 로딩 완료되면 녹화 상태 자동 전파
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (isRecording && changeInfo.status === 'complete') {
@@ -54,7 +81,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // 이어서 녹화 (기존 steps 유지)
   if (message.type === 'START_RECORDING') {
     isRecording = true;
-    // steps는 유지, globalClickNumber도 이어감
+    chrome.storage.local.set({ isRecordingState: true });
     chrome.action.setBadgeText({ text: 'REC' });
     chrome.action.setBadgeBackgroundColor({ color: '#FF0000' });
     broadcastToAllTabs(true);
@@ -67,6 +94,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     isRecording = false;
     steps = [];
     globalClickNumber = 0;
+    chrome.storage.local.set({ isRecordingState: false });
     persistStepsNow();
     chrome.action.setBadgeText({ text: '' });
     broadcastToAllTabs(false);
@@ -76,9 +104,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'STOP_RECORDING') {
     isRecording = false;
+    chrome.storage.local.set({ isRecordingState: false });
     chrome.action.setBadgeText({ text: '' });
     broadcastToAllTabs(false);
-    persistStepsNow(); // 녹화 중지 시 즉시 저장
+    persistStepsNow();
     sendResponse({ success: true, isRecording: false, steps: steps });
     return true;
   }
@@ -91,7 +120,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'GET_STATUS') {
-    sendResponse({ isRecording, stepCount: steps.length });
+    sendResponse({ isRecording, stepCount: steps.length, captureMode });
     return true;
   }
 

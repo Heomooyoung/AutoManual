@@ -14,9 +14,49 @@ let clickFeedbackTimeout = null;
 // 녹화 상태를 주기적으로 확인
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'RECORDING_STATE_CHANGED') {
+    const wasRecording = isRecording;
     isRecording = message.isRecording;
+    // 녹화 시작 시 화면 전체에 큰 글자 표시
+    if (!wasRecording && isRecording) {
+      showFullscreenFlash('녹화를 시작합니다');
+    }
   }
 });
+
+function showFullscreenFlash(text) {
+  const el = document.createElement('div');
+  el.style.cssText = `
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.6); z-index: 2147483647;
+    pointer-events: none; opacity: 1;
+    transition: opacity 0.5s ease;
+  `;
+  const inner = document.createElement('div');
+  inner.textContent = text;
+  inner.style.cssText = `
+    color: #ffffff; font-size: 72px; font-weight: 900;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    text-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    letter-spacing: 4px;
+    animation: am-flash-scale 0.4s ease;
+  `;
+  el.appendChild(inner);
+
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes am-flash-scale {
+      0% { transform: scale(0.5); opacity: 0; }
+      60% { transform: scale(1.05); }
+      100% { transform: scale(1); opacity: 1; }
+    }
+  `;
+  el.appendChild(style);
+  document.body.appendChild(el);
+
+  setTimeout(() => { el.style.opacity = '0'; }, 800);
+  setTimeout(() => { el.remove(); }, 1300);
+}
 
 // 초기 상태 확인 (새 탭/팝업 창에서도 녹화 상태 동기화)
 function syncRecordingStatus() {
@@ -161,7 +201,7 @@ function doCapture(event) {
     pageX: event.pageX,
     pageY: event.pageY,
     pageUrl: location.href,
-    pageTitle: document.title || window.top?.document?.title || '',
+    pageTitle: document.title || (() => { try { return window.top?.document?.title || ''; } catch(e) { return ''; } })(),
     // 클릭한 요소의 영역 정보 (라운드 사각형 표시용)
     elementRect: {
       x: rect.x + offsetX,
@@ -182,8 +222,8 @@ function doCapture(event) {
     },
     viewport: {
       // iframe 안이면 최상위 윈도우 크기를 사용해야 캡처 이미지와 좌표가 맞음
-      width: window.top?.innerWidth || window.innerWidth,
-      height: window.top?.innerHeight || window.innerHeight,
+      width: (() => { try { return window.top?.innerWidth || window.innerWidth; } catch(e) { return window.innerWidth; } })(),
+      height: (() => { try { return window.top?.innerHeight || window.innerHeight; } catch(e) { return window.innerHeight; } })(),
       devicePixelRatio: window.devicePixelRatio || 1
     },
     timestamp: now

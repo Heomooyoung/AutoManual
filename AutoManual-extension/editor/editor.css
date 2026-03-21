@@ -206,27 +206,6 @@ body {
   color: #000000;
 }
 
-.save-btn {
-  padding: 7px 16px;
-  border: none;
-  border-radius: 10px;
-  background: #34c759;
-  color: #ffffff;
-  font-size: 13px;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.save-btn:hover {
-  background: #2db84d;
-}
-
-.save-btn:active {
-  transform: scale(0.97);
-}
-
 .desc-list {
   flex: 1;
   overflow-y: auto;

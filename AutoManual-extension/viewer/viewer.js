@@ -57,9 +57,14 @@ function startViewerReRecord(stepIndex, stepNumber) {
   chrome.runtime.sendMessage({ type: 'START_RE_RECORD', stepIndex });
 }
 
-function loadAndRender() {
+function loadAndRender(retries) {
+  if (retries === undefined) retries = 5;
   chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
     if (chrome.runtime.lastError || !response?.steps?.length) {
+      if (retries > 0) {
+        setTimeout(() => loadAndRender(retries - 1), 400);
+        return;
+      }
       document.getElementById('stepContainer').innerHTML =
         '<p style="text-align:center; color:#6b7b9e; padding:60px;">미리볼 데이터가 없습니다.</p>';
       return;
@@ -113,14 +118,10 @@ function renderSteps() {
     const headerActions = document.createElement('div');
     headerActions.className = 'step-header-actions';
 
-    const reRecBtn = document.createElement('button');
-    reRecBtn.textContent = '🔄 재녹화';
-    reRecBtn.addEventListener('click', () => startViewerReRecord(si, step.stepNumber));
-
     const editBtn = document.createElement('button');
     editBtn.textContent = '✏️ 편집기';
     editBtn.addEventListener('click', () => {
-      chrome.tabs.create({ url: chrome.runtime.getURL('editor/editor.html') + '?step=' + si });
+      openEditorModal(si);
     });
 
     const upBtn = document.createElement('button');
@@ -143,7 +144,6 @@ function renderSteps() {
       chrome.runtime.sendMessage({ type: 'DELETE_STEP', index: si }, () => loadAndRender());
     });
 
-    headerActions.appendChild(reRecBtn);
     headerActions.appendChild(editBtn);
     headerActions.appendChild(upBtn);
     headerActions.appendChild(downBtn);
@@ -339,10 +339,82 @@ function openFullscreen(src) {
   document.body.appendChild(overlay);
 }
 
-// ── 전체 저장 ──
-document.getElementById('saveAllBtn').addEventListener('click', () => {
-  // 현재 화면의 모든 textarea 값을 background에 반영 (이미 change 이벤트로 반영됨)
-  alert('모든 변경사항이 저장되었습니다.');
+// ── 편집기 모달 ──
+let editorModal = null;
+
+function openEditorModal(stepIndex) {
+  if (editorModal) editorModal.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'editor-modal-overlay';
+
+  const modal = document.createElement('div');
+  modal.className = 'editor-modal';
+
+  const iframe = document.createElement('iframe');
+  iframe.src = chrome.runtime.getURL('editor/editor.html') + '?step=' + stepIndex;
+  iframe.className = 'editor-modal-iframe';
+
+  modal.appendChild(iframe);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  editorModal = overlay;
+
+  // 바깥 클릭으로 닫기
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeEditorModal();
+  });
+
+  // ESC로 닫기
+  function onEsc(e) {
+    if (e.key === 'Escape') { closeEditorModal(); document.removeEventListener('keydown', onEsc); }
+  }
+  document.addEventListener('keydown', onEsc);
+}
+
+function closeEditorModal() {
+  if (editorModal) {
+    editorModal.remove();
+    editorModal = null;
+    loadAndRender();
+  }
+}
+
+// ── PageUp/PageDown으로 스텝 이동 ──
+document.addEventListener('keydown', (e) => {
+  if (editorModal) return; // 편집기 모달 열려있으면 무시
+  const steps = document.querySelectorAll('.step');
+  if (!steps.length) return;
+
+  if (e.key === 'PageUp' || e.key === 'PageDown') {
+    e.preventDefault();
+    const container = document.getElementById('stepContainer');
+    const scrollTop = window.scrollY || document.documentElement.scrollTop;
+    let targetIdx = -1;
+
+    if (e.key === 'PageDown') {
+      // 현재 보이는 스텝 다음으로 이동
+      for (let i = 0; i < steps.length; i++) {
+        if (steps[i].offsetTop > scrollTop + 50) { targetIdx = i; break; }
+      }
+      if (targetIdx === -1) targetIdx = steps.length - 1;
+    } else {
+      // 현재 보이는 스텝 이전으로 이동
+      for (let i = steps.length - 1; i >= 0; i--) {
+        if (steps[i].offsetTop < scrollTop - 50) { targetIdx = i; break; }
+      }
+      if (targetIdx === -1) targetIdx = 0;
+    }
+
+    steps[targetIdx].scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+});
+
+// 편집기 iframe에서 닫기 요청 수신
+window.addEventListener('message', (e) => {
+  if (e.data?.type === 'EDITOR_MODAL_CLOSE') {
+    closeEditorModal();
+  }
 });
 
 // ── 닫기 ──

@@ -12,6 +12,9 @@ const canvasContainer = document.getElementById('canvasContainer');
 
 const params = new URLSearchParams(location.search);
 const stepIndex = parseInt(params.get('step'), 10);
+if (isNaN(stepIndex)) {
+  document.getElementById('canvasHint').textContent = '잘못된 접근입니다. (step 파라미터 없음)';
+}
 
 let bgImage = null;
 let bgDataUrl = '';
@@ -64,12 +67,19 @@ function performUndo() {
 let cropMode = false;
 let cropTop = 0, cropBottom = 0, cropLeft = 0, cropRight = 0;
 let cropDragging = null;
-const CROP_HANDLE_HIT = 20;
+const CROP_HANDLE_HIT = 30;
 
 // ── 선택 도구 상태 ──
 let selectedIndex = -1;
 let isDraggingSelected = false;
 let dragOffsetX = 0, dragOffsetY = 0;
+
+// ── 리사이즈/회전 상태 ──
+let resizeHandle = null; // 'tl','tc','tr','ml','mr','bl','bc','br','rotate'
+let resizeStartX = 0, resizeStartY = 0;
+let resizeOriginal = null; // { x, y, w, h }
+const HANDLE_SIZE = 8;
+const HANDLE_HIT = 12;
 
 const toolHints = {
   rect: '드래그하여 사각형을 그리세요',
@@ -260,11 +270,9 @@ document.getElementById('clearBtn').addEventListener('click', () => {
   renderDescList();
 });
 
-// ── 닫기 버튼 (저장 없이 나가기) ──
+// ── 닫기 버튼 (저장 후 나가기) ──
 document.getElementById('closeBtn').addEventListener('click', () => {
-  if (confirm('저장하지 않고 닫으시겠습니까? 변경사항이 사라집니다.')) {
-    window.close();
-  }
+  saveAndClose();
 });
 
 // ══════════════════════════════════════
@@ -412,36 +420,91 @@ function pointToSegmentDist(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }
 
-function drawSelection(ann) {
-  if (!ann) return;
-  ctx.save();
-  ctx.setLineDash([6, 3]);
-  ctx.strokeStyle = '#4a90d9';
-  ctx.lineWidth = 2;
-
+function getSelectionBounds(ann) {
   if (ann.type === 'numbering') {
-    ctx.beginPath();
-    ctx.arc(ann.x, ann.y, 24, 0, Math.PI * 2);
-    ctx.stroke();
+    return { x: ann.x - 24, y: ann.y - 24, w: 48, h: 48 };
   } else if (ann.type === 'text') {
     ctx.font = `bold ${ann.fontSize || 20}px 'Malgun Gothic', sans-serif`;
     const tw = ctx.measureText(ann.text || '').width;
     const th = (ann.fontSize || 20) + 6;
-    ctx.strokeRect(ann.x - 8, ann.y - 6, tw + 16, th + 8);
-  } else if (ann.type === 'arrow') {
-    const minX = Math.min(ann.x, ann.x + ann.w) - 10;
-    const minY = Math.min(ann.y, ann.y + ann.h) - 10;
-    const maxX = Math.max(ann.x, ann.x + ann.w) + 10;
-    const maxY = Math.max(ann.y, ann.y + ann.h) + 10;
-    ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+    return { x: ann.x - 8, y: ann.y - 6, w: tw + 16, h: th + 8 };
   } else {
-    const rx = Math.min(ann.x, ann.x + ann.w) - 6;
-    const ry = Math.min(ann.y, ann.y + ann.h) - 6;
-    ctx.strokeRect(rx, ry, Math.abs(ann.w) + 12, Math.abs(ann.h) + 12);
+    const pad = ann.type === 'arrow' ? 10 : 6;
+    return {
+      x: Math.min(ann.x, ann.x + ann.w) - pad,
+      y: Math.min(ann.y, ann.y + ann.h) - pad,
+      w: Math.abs(ann.w) + pad * 2,
+      h: Math.abs(ann.h) + pad * 2
+    };
+  }
+}
+
+function drawSelection(ann) {
+  if (!ann) return;
+  const b = getSelectionBounds(ann);
+  ctx.save();
+
+  // 선택 테두리
+  ctx.setLineDash([6, 3]);
+  ctx.strokeStyle = '#4a90d9';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(b.x, b.y, b.w, b.h);
+  ctx.setLineDash([]);
+
+  // 넘버링/텍스트는 리사이즈 불필요
+  if (ann.type === 'numbering' || ann.type === 'text') {
+    ctx.restore();
+    return;
   }
 
-  ctx.setLineDash([]);
+  // 리사이즈 핸들 (8개)
+  const handles = getHandlePositions(b);
+  for (const key in handles) {
+    const h = handles[key];
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#4a90d9';
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(h.x - HANDLE_SIZE / 2, h.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+    ctx.strokeRect(h.x - HANDLE_SIZE / 2, h.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+  }
+
   ctx.restore();
+}
+
+function getHandlePositions(b) {
+  return {
+    tl: { x: b.x, y: b.y },
+    tc: { x: b.x + b.w / 2, y: b.y },
+    tr: { x: b.x + b.w, y: b.y },
+    ml: { x: b.x, y: b.y + b.h / 2 },
+    mr: { x: b.x + b.w, y: b.y + b.h / 2 },
+    bl: { x: b.x, y: b.y + b.h },
+    bc: { x: b.x + b.w / 2, y: b.y + b.h },
+    br: { x: b.x + b.w, y: b.y + b.h }
+  };
+}
+
+function hitTestHandle(px, py, ann) {
+  if (ann.type === 'numbering' || ann.type === 'text') return null;
+  const b = getSelectionBounds(ann);
+
+  // 리사이즈 핸들
+  const handles = getHandlePositions(b);
+  for (const key in handles) {
+    const h = handles[key];
+    if (Math.abs(px - h.x) < HANDLE_HIT && Math.abs(py - h.y) < HANDLE_HIT) return key;
+  }
+  return null;
+}
+
+function getHandleCursor(handle) {
+  const cursors = {
+    tl: 'nwse-resize', tr: 'nesw-resize',
+    bl: 'nesw-resize', br: 'nwse-resize',
+    tc: 'ns-resize',   bc: 'ns-resize',
+    ml: 'ew-resize',   mr: 'ew-resize'
+  };
+  return cursors[handle] || 'default';
 }
 
 // ══════════════════════════════════════
@@ -579,8 +642,8 @@ function drawHorizontalHandle(y, color, label) {
   ctx.beginPath(); ctx.moveTo(l, y); ctx.lineTo(r, y); ctx.stroke();
   const hx = (l + r) / 2;
   ctx.fillStyle = color;
-  ctx.beginPath(); ctx.roundRect(hx - 30, y - 11, 60, 22, 11); ctx.fill();
-  ctx.fillStyle = '#fff'; ctx.font = 'bold 11px sans-serif';
+  ctx.beginPath(); ctx.roundRect(hx - 45, y - 16, 90, 32, 16); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 14px sans-serif';
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(label, hx, y);
 }
@@ -592,8 +655,8 @@ function drawVerticalHandle(x, color, label) {
   ctx.beginPath(); ctx.moveTo(x, t); ctx.lineTo(x, b); ctx.stroke();
   const hy = (t + b) / 2;
   ctx.fillStyle = color;
-  ctx.beginPath(); ctx.roundRect(x - 20, hy - 11, 40, 22, 11); ctx.fill();
-  ctx.fillStyle = '#fff'; ctx.font = 'bold 10px sans-serif';
+  ctx.beginPath(); ctx.roundRect(x - 30, hy - 16, 60, 32, 16); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 14px sans-serif';
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(label, x, hy);
 }
@@ -638,20 +701,30 @@ canvas.addEventListener('mousedown', (e) => {
 
   // 선택 도구
   if (currentTool === 'select') {
+    // 선택된 마커가 있으면 핸들 클릭 우선 체크
+    if (selectedIndex >= 0 && selectedIndex < annotations.length) {
+      const ann = annotations[selectedIndex];
+      const handle = hitTestHandle(px, py, ann);
+      if (handle) {
+        saveUndoState();
+        resizeHandle = handle;
+        resizeStartX = px;
+        resizeStartY = py;
+        resizeOriginal = { x: ann.x, y: ann.y, w: ann.w, h: ann.h };
+        canvas.style.cursor = getHandleCursor(handle);
+        return;
+      }
+    }
+
     const idx = hitTest(px, py);
     if (idx >= 0) {
-      // 이미 선택된 마커를 다시 클릭 → 드래그 시작
+      // 이미 선택된 마커를 다시 클릭 → 드래그 이동
       if (selectedIndex === idx) {
         isDraggingSelected = true;
         saveUndoState();
         const ann = annotations[idx];
-        if (ann.type === 'numbering') {
-          dragOffsetX = px - ann.x;
-          dragOffsetY = py - ann.y;
-        } else {
-          dragOffsetX = px - ann.x;
-          dragOffsetY = py - ann.y;
-        }
+        dragOffsetX = px - ann.x;
+        dragOffsetY = py - ann.y;
         canvas.style.cursor = 'grabbing';
         return;
       }
@@ -716,6 +789,37 @@ canvas.addEventListener('mousemove', (e) => {
     return;
   }
 
+  // 선택 도구 — 리사이즈/회전 드래그 중
+  if (currentTool === 'select' && resizeHandle && selectedIndex >= 0) {
+    const ann = annotations[selectedIndex];
+    const dx = curX - resizeStartX;
+    const dy = curY - resizeStartY;
+    const o = resizeOriginal;
+
+    {
+      // 리사이즈
+      if (resizeHandle.includes('l')) { ann.x = o.x + dx; ann.w = o.w - dx; }
+      if (resizeHandle.includes('r')) { ann.w = o.w + dx; }
+      if (resizeHandle.includes('t')) { ann.y = o.y + dy; ann.h = o.h - dy; }
+      if (resizeHandle.includes('b')) { ann.h = o.h + dy; }
+    }
+    render();
+    drawSelection(ann);
+    return;
+  }
+
+  // 선택 도구 — 핸들 호버 시 커서 변경
+  if (currentTool === 'select' && !isDraggingSelected && !resizeHandle && selectedIndex >= 0) {
+    const ann = annotations[selectedIndex];
+    const handle = hitTestHandle(curX, curY, ann);
+    if (handle) {
+      canvas.style.cursor = getHandleCursor(handle);
+    } else {
+      const idx = hitTest(curX, curY);
+      canvas.style.cursor = idx >= 0 ? 'grab' : 'default';
+    }
+  }
+
   // 선택 도구 드래그 이동
   if (currentTool === 'select' && isDraggingSelected && selectedIndex >= 0) {
     const ann = annotations[selectedIndex];
@@ -740,6 +844,17 @@ canvas.addEventListener('mouseup', (e) => {
 
   if (cropMode) {
     if (cropDragging) { cropDragging = null; canvas.style.cursor = 'default'; renderCropOverlay(); }
+    return;
+  }
+
+  // 선택 도구 — 리사이즈/회전 종료
+  if (currentTool === 'select' && resizeHandle) {
+    resizeHandle = null;
+    resizeOriginal = null;
+    canvas.style.cursor = 'grab';
+    render();
+    if (selectedIndex >= 0) drawSelection(annotations[selectedIndex]);
+    renderDescList();
     return;
   }
 
@@ -797,6 +912,7 @@ canvas.addEventListener('mouseleave', () => {
   if (isDrawing) { isDrawing = false; render(); }
   if (cropMode && cropDragging) { cropDragging = null; canvas.style.cursor = 'default'; }
   if (isDraggingSelected) { isDraggingSelected = false; canvas.style.cursor = 'pointer'; }
+  if (resizeHandle) { resizeHandle = null; resizeOriginal = null; }
 });
 
 // ══════════════════════════════════════
@@ -1083,15 +1199,36 @@ function renderDescList() {
 }
 
 // ══════════════════════════════════════
-// 최종 저장
+// 최종 저장 (재시도 로직 포함)
 // ══════════════════════════════════════
-document.getElementById('saveBtn').addEventListener('click', () => {
-  if (!viewport || !bgImage) return;
+function sendMessageWithRetry(msg, retries, callback) {
+  chrome.runtime.sendMessage(msg, (response) => {
+    if (chrome.runtime.lastError || !response?.success) {
+      if (retries > 0) {
+        setTimeout(() => sendMessageWithRetry(msg, retries - 1, callback), 300);
+      } else {
+        callback(response);
+      }
+    } else {
+      callback(response);
+    }
+  });
+}
+
+function closeEditor() {
+  // iframe 안이면 부모에게 닫기 요청, 아니면 window.close()
+  if (window.parent !== window) {
+    window.parent.postMessage({ type: 'EDITOR_MODAL_CLOSE' }, '*');
+  } else {
+    window.close();
+  }
+}
+
+function saveAndClose() {
+  if (!viewport || !bgImage) { closeEditor(); return; }
   if (cropMode) exitCropMode();
   if (activeTextInput) commitInlineText();
   selectedIndex = -1;
-
-  // 바로 저장
 
   const invScale = 1 / imgScale;
 
@@ -1109,7 +1246,6 @@ document.getElementById('saveBtn').addEventListener('click', () => {
       element: { tag: ann.type, text: ann.text || '' },
       description: ann.description || (ann.type === 'text' ? ann.text : '')
     };
-    // 텍스트 고유 속성 보존
     if (ann.type === 'text') {
       marker.fontSize = ann.fontSize || 20;
       marker.color = ann.color || '#e63232';
@@ -1120,20 +1256,19 @@ document.getElementById('saveBtn').addEventListener('click', () => {
   render();
   const markedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
 
-  chrome.runtime.sendMessage({
+  sendMessageWithRetry({
     type: 'SAVE_EDITOR',
     stepIndex,
     markers,
     screenshotWithMarker: markedDataUrl,
     screenshot: bgDataUrl,
     description: markers.map((m,i) => `${i+1}. ${m.description||''}`).filter(d=>d.length>3).join('\n')
-  }, (response) => {
+  }, 3, (response) => {
     if (response?.success) {
-      alert('저장되었습니다!');
       chrome.runtime.sendMessage({ type: 'EDITOR_SAVED' }).catch(()=>{});
-      window.close();
+      closeEditor();
     } else {
-      alert('저장 실패');
+      alert('저장에 실패했습니다. 다시 시도해주세요.');
     }
   });
-});
+}

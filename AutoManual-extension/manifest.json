@@ -10,7 +10,8 @@
     "storage",
     "unlimitedStorage",
     "tabs",
-    "scripting"
+    "scripting",
+    "downloads"
   ],
 
   "host_permissions": [
@@ -48,6 +49,16 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+
+  "commands": {
+    "toggle-recording": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+E",
+        "mac": "Command+Shift+E"
+      },
+      "description": "녹화 시작/정지 토글"
+    }
   },
 
   "web_accessible_resources": [
