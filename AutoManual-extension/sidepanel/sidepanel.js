@@ -370,7 +370,8 @@ selectAllBtn.addEventListener('click', () => {
   if (selectedIndices.size === cards.length) {
     selectedIndices.clear();
   } else {
-    cards.forEach(c => selectedIndices.add(Number(c.dataset.index)));
+    selectedIndices.clear();
+    cards.forEach((_, i) => selectedIndices.add(i));
   }
   updateSelectVisuals();
   updateSelectUI();
@@ -412,11 +413,11 @@ function updateSelectUI() {
 }
 
 function updateSelectVisuals() {
-  stepList.querySelectorAll('.step-thumb-card').forEach(card => {
-    const idx = Number(card.dataset.index);
-    card.classList.toggle('selected', selectedIndices.has(idx));
+  const cards = stepList.querySelectorAll('.step-thumb-card');
+  cards.forEach((card, i) => {
+    card.classList.toggle('selected', selectedIndices.has(i));
     const cb = card.querySelector('.step-thumb-checkbox');
-    if (cb) cb.textContent = selectedIndices.has(idx) ? '✓' : '';
+    if (cb) cb.textContent = selectedIndices.has(i) ? '✓' : '';
   });
 }
 
@@ -752,11 +753,16 @@ function addStepCard(step) {
   // 선택 모드 클릭 처리
   card.addEventListener('click', (e) => {
     if (!selectMode) return;
+    // 드래그 직후 click 이벤트 무시
+    if (dragSrcIndex !== null) return;
     e.stopPropagation();
-    if (selectedIndices.has(stepIndex)) {
-      selectedIndices.delete(stepIndex);
+    // 현재 실제 인덱스를 카드 위치로 재계산
+    const currentIdx = Array.from(stepList.querySelectorAll('.step-thumb-card')).indexOf(card);
+    if (currentIdx < 0) return;
+    if (selectedIndices.has(currentIdx)) {
+      selectedIndices.delete(currentIdx);
     } else {
-      selectedIndices.add(stepIndex);
+      selectedIndices.add(currentIdx);
     }
     updateSelectUI();
   });
@@ -853,6 +859,9 @@ function updateStepCount() {
 
 // ─── 전체 목록 새로고침 ───
 function refreshStepList(stepsData) {
+  // 새로고침 시 선택 인덱스 초기화 (stale 인덱스 방지)
+  selectedIndices.clear();
+
   stepList.querySelectorAll('.step-thumb-card').forEach((card) => card.remove());
   if (!stepsData || stepsData.length === 0) {
     emptyState.style.display = 'block';

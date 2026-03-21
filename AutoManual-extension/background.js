@@ -9,6 +9,7 @@ let steps = [];
 let captureMode = 'per-click';
 let globalClickNumber = 0;
 let reRecordTarget = null; // { stepIndex: number, newSteps: [] } — 재녹화 대상
+let modeJustSwitched = false; // 모드 전환 직후 플래그
 
 // Service Worker 재시작 시 저장된 데이터 복구
 chrome.storage.local.get(['stepsData', 'captureMode', 'isRecordingState'], (result) => {
@@ -114,6 +115,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'SET_CAPTURE_MODE') {
     captureMode = message.mode;
+    modeJustSwitched = true; // 다음 캡처는 새 step으로 시작
     chrome.storage.local.set({ captureMode });
     sendResponse({ success: true, mode: captureMode });
     return true;
@@ -585,7 +587,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       globalClickNumber++;
 
-      if (captureMode === 'per-page' && steps.length > 0) {
+      if (captureMode === 'per-page' && steps.length > 0 && !modeJustSwitched) {
         // === 화면당 1장 모드 ===
         const lastStep = steps[steps.length - 1];
 
@@ -648,6 +650,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       // === 클릭당 1장 모드 (기본) 또는 새 페이지 ===
+      modeJustSwitched = false; // 새 step 생성 시 플래그 리셋
       const stepNumber = steps.length + 1;
 
       const markedDataUrl = await addClickMarker(

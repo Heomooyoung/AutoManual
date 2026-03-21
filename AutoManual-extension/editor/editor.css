@@ -113,7 +113,7 @@ body {
 }
 
 .tool-btn {
-  padding: 7px 14px;
+  padding: 8px 10px;
   border: none;
   border-radius: 8px;
   background: rgba(120, 120, 128, 0.08);
@@ -123,6 +123,13 @@ body {
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tool-btn svg {
+  display: block;
 }
 
 .tool-btn:hover {
@@ -155,6 +162,51 @@ body {
 
 .tool-clear:hover {
   background: rgba(255, 59, 48, 0.2);
+}
+
+.color-palette {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.color-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+  padding: 0;
+}
+
+.color-btn:hover {
+  transform: scale(1.15);
+}
+
+.color-btn.active {
+  border-color: #007aff;
+  box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.3);
+}
+
+.badge-size-wrap {
+  display: flex;
+  align-items: center;
+}
+
+.badge-size-select {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(120, 120, 128, 0.08);
+  color: #3c3c43;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .canvas-container {

@@ -26,8 +26,26 @@ let currentTool = 'rect';
 let isDrawing = false;
 let startX = 0, startY = 0;
 
-const DRAW_COLOR = 'rgba(230, 50, 50, 0.85)';
-const DRAW_FILL = 'rgba(230, 50, 50, 0.08)';
+let currentDrawColor = '#e63232';
+
+function getDrawColor() {
+  const r = parseInt(currentDrawColor.slice(1, 3), 16);
+  const g = parseInt(currentDrawColor.slice(3, 5), 16);
+  const b = parseInt(currentDrawColor.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, 0.85)`;
+}
+function getDrawFill() {
+  const r = parseInt(currentDrawColor.slice(1, 3), 16);
+  const g = parseInt(currentDrawColor.slice(3, 5), 16);
+  const b = parseInt(currentDrawColor.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, 0.08)`;
+}
+function getDrawColorSolid() {
+  const r = parseInt(currentDrawColor.slice(1, 3), 16);
+  const g = parseInt(currentDrawColor.slice(3, 5), 16);
+  const b = parseInt(currentDrawColor.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, 0.95)`;
+}
 
 // ── Undo 히스토리 (이미지 상태 스냅샷) ──
 let undoStack = []; // { bgDataUrl, canvasW, canvasH, annotations, effects }
@@ -134,6 +152,7 @@ function onStepLoaded(step) {
             text: m.element?.text || m.description || '',
             fontSize: m.fontSize || 20,
             color: m.color || '#e63232',
+            badgeSize: m.badgeSize || null,
             number: i + 1,
             description: m.description || m.element?.text || ''
           });
@@ -145,7 +164,9 @@ function onStepLoaded(step) {
             y: m.y * imgScale,
             w: 0, h: 0,
             number: i + 1,
-            description: m.description || ''
+            description: m.description || '',
+            color: m.color || null,
+            badgeSize: m.badgeSize || null
           });
         } else if (eRect && eRect.width > 0) {
           // rect, circle, arrow 복원
@@ -153,7 +174,9 @@ function onStepLoaded(step) {
             type: tag === 'arrow' ? 'arrow' : (tag === 'circle' ? 'circle' : 'rect'),
             x: eRect.x * imgScale, y: eRect.y * imgScale,
             w: eRect.width * imgScale, h: eRect.height * imgScale,
-            number: i + 1, description: m.description || ''
+            number: i + 1, description: m.description || '',
+            color: m.color || null,
+            badgeSize: m.badgeSize || null
           });
         } else {
           // 폴백: 원형
@@ -161,7 +184,9 @@ function onStepLoaded(step) {
             type: 'circle',
             x: (m.x * imgScale) - 20, y: (m.y * imgScale) - 20,
             w: 40, h: 40,
-            number: i + 1, description: m.description || ''
+            number: i + 1, description: m.description || '',
+            color: m.color || null,
+            badgeSize: m.badgeSize || null
           });
         }
       });
@@ -198,6 +223,17 @@ document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
 
     // 커서
     canvas.style.cursor = (currentTool === 'select') ? 'pointer' : 'crosshair';
+  });
+});
+
+// ── 컬러 팔레트 ──
+document.querySelectorAll('.color-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentDrawColor = btn.dataset.color;
+    // 텍스트 도구 색상도 동기화
+    document.getElementById('textColor').value = currentDrawColor;
   });
 });
 
@@ -754,7 +790,8 @@ canvas.addEventListener('mousedown', (e) => {
     const nextNum = annotations.length + 1;
     annotations.push({
       type: 'numbering', x: px, y: py, w: 0, h: 0,
-      number: nextNum, description: '', _addedAt: Date.now()
+      number: nextNum, description: '', _addedAt: Date.now(),
+      badgeSize: getBadgeSize(), color: currentDrawColor
     });
     render();
     renderDescList();
@@ -835,7 +872,7 @@ canvas.addEventListener('mousemove', (e) => {
   if (currentTool === 'blur') {
     drawBlurPreview(ctx, startX, startY, curX - startX, curY - startY);
   } else {
-    drawShape(ctx, currentTool, startX, startY, curX - startX, curY - startY, 0, true);
+    drawShape(ctx, currentTool, startX, startY, curX - startX, curY - startY, 0, true, { color: currentDrawColor });
   }
 });
 
@@ -902,7 +939,8 @@ canvas.addEventListener('mouseup', (e) => {
   saveUndoState();
   annotations.push({
     type: currentTool, x: startX, y: startY, w, h,
-    number: annotations.length + 1, description: '', _addedAt: Date.now()
+    number: annotations.length + 1, description: '', _addedAt: Date.now(),
+    color: currentDrawColor, badgeSize: getBadgeSize()
   });
   render();
   renderDescList();
@@ -972,7 +1010,9 @@ function drawBlurPreview(ctx, x, y, w, h) {
 // ══════════════════════════════════════
 // 렌더링
 // ══════════════════════════════════════
-const BADGE_SIZE = 24;
+function getBadgeSize() {
+  return parseInt(document.getElementById('badgeSizeSelect').value, 10) || 22;
+}
 
 function render() {
   if (!bgImage) return;
@@ -987,6 +1027,14 @@ function render() {
   }
 }
 
+function annColor(ann, alpha) {
+  const c = (ann && ann.color) || '#e63232';
+  const r = parseInt(c.slice(1, 3), 16);
+  const g = parseInt(c.slice(3, 5), 16);
+  const b = parseInt(c.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 function drawShape(ctx, type, x, y, w, h, number, isPreview, ann) {
   ctx.save();
   ctx.globalAlpha = isPreview ? 0.5 : 1;
@@ -997,14 +1045,14 @@ function drawShape(ctx, type, x, y, w, h, number, isPreview, ann) {
     const rx = Math.min(x, x + w) - pad, ry = Math.min(y, y + h) - pad;
     const rw = Math.abs(w) + pad*2, rh = Math.abs(h) + pad*2;
     ctx.beginPath(); ctx.roundRect(rx, ry, rw, rh, 8);
-    ctx.fillStyle = DRAW_FILL; ctx.fill();
-    ctx.strokeStyle = DRAW_COLOR; ctx.lineWidth = 3; ctx.stroke();
+    ctx.fillStyle = annColor(ann, 0.08); ctx.fill();
+    ctx.strokeStyle = annColor(ann, 0.85); ctx.lineWidth = 3; ctx.stroke();
     badgePos = { x: rx - 8, y: ry - 8 };
 
   } else if (type === 'arrow') {
     const ex = x + w, ey = y + h;
     ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ex, ey);
-    ctx.strokeStyle = DRAW_COLOR; ctx.lineWidth = 3; ctx.stroke();
+    ctx.strokeStyle = annColor(ann, 0.85); ctx.lineWidth = 3; ctx.stroke();
     const angle = Math.atan2(h, w), hl = 18;
     ctx.beginPath();
     ctx.moveTo(ex, ey);
@@ -1018,13 +1066,13 @@ function drawShape(ctx, type, x, y, w, h, number, isPreview, ann) {
     const cx = x+w/2, cy = y+h/2;
     const rx2 = Math.max(Math.abs(w)/2, 4), ry2 = Math.max(Math.abs(h)/2, 4);
     ctx.beginPath(); ctx.ellipse(cx, cy, rx2, ry2, 0, 0, Math.PI*2);
-    ctx.fillStyle = DRAW_FILL; ctx.fill();
-    ctx.strokeStyle = DRAW_COLOR; ctx.lineWidth = 3; ctx.stroke();
+    ctx.fillStyle = annColor(ann, 0.08); ctx.fill();
+    ctx.strokeStyle = annColor(ann, 0.85); ctx.lineWidth = 3; ctx.stroke();
     badgePos = { x: cx - rx2 - 8, y: cy - ry2 - 8 };
 
   } else if (type === 'text' && ann) {
     const fs = ann.fontSize || 20;
-    const clr = ann.color || '#e63232';
+    const clr = ann.color || currentDrawColor;
     ctx.font = `bold ${fs}px 'Malgun Gothic', sans-serif`;
     ctx.textBaseline = 'top';
     const tw = ctx.measureText(ann.text || '').width;
@@ -1032,39 +1080,41 @@ function drawShape(ctx, type, x, y, w, h, number, isPreview, ann) {
     ctx.fillRect(x - 4, y - 2, tw + 8, fs + 6);
     ctx.fillStyle = clr;
     ctx.fillText(ann.text || '', x, y);
-    badgePos = { x: x - 14, y: y - 14 };
+    // 텍스트는 자체가 내용이므로 번호 배지 불필요
 
   } else if (type === 'numbering') {
-    // 큰 원형 넘버링 마커 (독립 렌더링, badgePos 사용 안 함)
-    const radius = 18;
+    const sz = (ann && ann.badgeSize) || 28;
+    const radius = sz / 2;
+    const fontSize = Math.round(sz * 0.45);
     ctx.shadowColor = 'rgba(0,0,0,0.4)'; ctx.shadowBlur = 6;
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(230, 50, 50, 0.95)';
+    ctx.fillStyle = annColor(ann, 0.95);
     ctx.fill();
     ctx.shadowColor = 'transparent';
-    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3; ctx.stroke();
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = Math.max(2, sz * 0.08); ctx.stroke();
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 16px -apple-system, sans-serif';
+    ctx.font = `bold ${fontSize}px -apple-system, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(String(number), x, y);
-    // numbering은 자체 원이 번호이므로 badgePos 불필요
     ctx.restore();
     return;
   }
 
   if (number > 0 && badgePos) {
-    const bx = Math.max(2, Math.min(badgePos.x, canvas.width - BADGE_SIZE - 2));
-    const by = Math.max(2, Math.min(badgePos.y, canvas.height - BADGE_SIZE - 2));
+    const sz = (ann && ann.badgeSize) || 28;
+    const bx = Math.max(2, Math.min(badgePos.x, canvas.width - sz - 2));
+    const by = Math.max(2, Math.min(badgePos.y, canvas.height - sz - 2));
+    const fontSize = Math.round(sz * 0.45);
     ctx.shadowColor = 'rgba(0,0,0,0.3)'; ctx.shadowBlur = 4;
-    ctx.beginPath(); ctx.arc(bx+BADGE_SIZE/2, by+BADGE_SIZE/2, BADGE_SIZE/2, 0, Math.PI*2);
-    ctx.fillStyle = 'rgba(230,50,50,0.95)'; ctx.fill();
+    ctx.beginPath(); ctx.arc(bx+sz/2, by+sz/2, sz/2, 0, Math.PI*2);
+    ctx.fillStyle = annColor(ann, 0.95); ctx.fill();
     ctx.shadowColor = 'transparent';
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(2, sz * 0.08); ctx.stroke();
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 13px -apple-system, sans-serif';
+    ctx.font = `bold ${fontSize}px -apple-system, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(String(number), bx+BADGE_SIZE/2, by+BADGE_SIZE/2);
+    ctx.fillText(String(number), bx+sz/2, by+sz/2);
   }
 
   ctx.restore();
@@ -1246,9 +1296,11 @@ function saveAndClose() {
       element: { tag: ann.type, text: ann.text || '' },
       description: ann.description || (ann.type === 'text' ? ann.text : '')
     };
+    // 모든 타입에 색상/사이즈 보존
+    if (ann.color) marker.color = ann.color;
+    if (ann.badgeSize) marker.badgeSize = ann.badgeSize;
     if (ann.type === 'text') {
       marker.fontSize = ann.fontSize || 20;
-      marker.color = ann.color || '#e63232';
     }
     return marker;
   });
