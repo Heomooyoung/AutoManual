@@ -10,14 +10,18 @@ let captureMode = 'per-click';
 let globalClickNumber = 0;
 let reRecordTarget = null; // { stepIndex: number, newSteps: [] } — 재녹화 대상
 let modeJustSwitched = false; // 모드 전환 직후 플래그
+let captureType = 'full'; // 'full' | 'area' — 캡처 토글 상태
 
 // Service Worker 재시작 시 저장된 데이터 복구
-chrome.storage.local.get(['stepsData', 'captureMode', 'isRecordingState'], (result) => {
+chrome.storage.local.get(['stepsData', 'captureMode', 'isRecordingState', 'captureType'], (result) => {
   if (result.stepsData?.length) {
     steps = result.stepsData;
   }
   if (result.captureMode) {
     captureMode = result.captureMode;
+  }
+  if (result.captureType) {
+    captureType = result.captureType;
   }
   if (result.isRecordingState) {
     isRecording = true;
@@ -26,6 +30,48 @@ chrome.storage.local.get(['stepsData', 'captureMode', 'isRecordingState'], (resu
     broadcastToAllTabs(true);
   }
 });
+
+// 마지막 포커스된 웹 윈도우 추적 (팝업 캡처 대응)
+let lastFocusedWebWindowId = null;
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  chrome.windows.get(windowId, (win) => {
+    if (chrome.runtime.lastError) return;
+    // 사이드패널이 아닌 일반/팝업 윈도우만 추적
+    if (win.type === 'normal' || win.type === 'popup') {
+      // 확장 페이지(viewer, editor 등)가 아닌 윈도우만
+      chrome.tabs.query({ active: true, windowId }, (tabs) => {
+        if (tabs[0] && !tabs[0].url?.startsWith('chrome-extension://')) {
+          lastFocusedWebWindowId = windowId;
+        }
+      });
+    }
+  });
+});
+
+// 가장 적합한 캡처 대상 탭 찾기
+function findCaptureTarget(callback) {
+  // 1) 추적된 마지막 웹 윈도우에서 활성 탭 찾기
+  if (lastFocusedWebWindowId !== null) {
+    chrome.tabs.query({ active: true, windowId: lastFocusedWebWindowId }, (tabs) => {
+      if (!chrome.runtime.lastError && tabs[0]) {
+        callback(tabs[0]);
+        return;
+      }
+      // fallback
+      fallbackFindTab(callback);
+    });
+  } else {
+    fallbackFindTab(callback);
+  }
+}
+const MAX_STEPS = 100;
+
+function fallbackFindTab(callback) {
+  chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+    callback(tabs[0] || null);
+  });
+}
 
 // steps 변경 시 storage에 영속화 (배치 처리: 연속 클릭 시 마지막 1회만 저장)
 let persistTimer = null;
@@ -64,6 +110,61 @@ chrome.commands.onCommand.addListener((command) => {
     }
     // sidepanel에 상태 변경 알림
     chrome.runtime.sendMessage({ type: 'RECORDING_TOGGLED', isRecording }).catch(() => {});
+  }
+
+  // Alt+R: 수동 캡처 (토글 상태에 따라 전체/선택영역)
+  if (command === 'manual-capture') {
+    if (!isRecording) return;
+    if (steps.length >= MAX_STEPS) return;
+    findCaptureTarget((tab) => {
+      if (!tab) return;
+      chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 80 }).then((dataUrl) => {
+        if (captureType === 'area') {
+          // 선택영역 모드: content.js에 영역 선택 요청
+          chrome.tabs.sendMessage(tab.id, {
+            type: 'SELECT_AREA',
+            screenshot: dataUrl,
+            viewport: { width: tab.width || 1920, height: tab.height || 1080, devicePixelRatio: 1 }
+          });
+        } else {
+          // 전체 모드
+          const step = {
+            stepNumber: steps.length + 1,
+            screenshot: dataUrl,
+            screenshotWithMarker: dataUrl,
+            pageUrl: tab.url || '',
+            pageTitle: tab.title || '',
+            tabUrl: tab.url || '',
+            clickX: 0, clickY: 0,
+            elementRect: null,
+            element: { tag: '', text: '' },
+            viewport: { width: tab.width || 1920, height: tab.height || 1080, devicePixelRatio: 1 },
+            description: '',
+            timestamp: Date.now(),
+            markers: []
+          };
+          steps.push(step);
+          persistSteps();
+          chrome.runtime.sendMessage({ type: 'NEW_STEP', step }).catch(() => {});
+        }
+      }).catch((err) => console.error('수동 캡처 실패:', err));
+    });
+  }
+
+  // Alt+1: 클릭당 1장 모드
+  if (command === 'mode-per-click') {
+    captureMode = 'per-click';
+    modeJustSwitched = true;
+    chrome.storage.local.set({ captureMode });
+    chrome.runtime.sendMessage({ type: 'MODE_CHANGED', mode: 'per-click' }).catch(() => {});
+  }
+
+  // Alt+2: 화면당 1장 모드
+  if (command === 'mode-per-page') {
+    captureMode = 'per-page';
+    modeJustSwitched = true;
+    chrome.storage.local.set({ captureMode });
+    chrome.runtime.sendMessage({ type: 'MODE_CHANGED', mode: 'per-page' }).catch(() => {});
   }
 });
 
@@ -122,7 +223,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'GET_STATUS') {
-    sendResponse({ isRecording, stepCount: steps.length, captureMode });
+    sendResponse({ isRecording, stepCount: steps.length, captureMode, captureType });
     return true;
   }
 
@@ -131,10 +232,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // 슬라이드 복제
+  if (message.type === 'DUPLICATE_STEP') {
+    if (steps.length >= MAX_STEPS) {
+      sendResponse({ success: false, error: `최대 ${MAX_STEPS}장까지 추가할 수 있습니다.` });
+      return true;
+    }
+    const idx = message.index;
+    if (idx >= 0 && idx < steps.length) {
+      const clone = JSON.parse(JSON.stringify(steps[idx]));
+      clone.modified = false;
+      clone.changeSummary = '';
+      steps.splice(idx + 1, 0, clone);
+      steps.forEach((s, i) => s.stepNumber = i + 1);
+      persistSteps();
+      chrome.runtime.sendMessage({ type: 'STEPS_REORDERED' }).catch(() => {});
+    }
+    sendResponse({ success: true, newIndex: idx + 1 });
+    return true;
+  }
+
   if (message.type === 'DELETE_STEP') {
     steps = steps.filter((_, i) => i !== message.index);
     steps.forEach((s, i) => s.stepNumber = i + 1);
     persistSteps();
+    chrome.runtime.sendMessage({ type: 'STEPS_REORDERED' }).catch(() => {});
     sendResponse({ success: true, steps });
     return true;
   }
@@ -149,19 +271,151 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // 이미지 팝업 열기
+  if (message.type === 'OPEN_IMAGE_POPUP') {
+    chrome.storage.local.set({ _popupImage: message.src }, () => {
+      chrome.windows.create({
+        url: chrome.runtime.getURL('viewer/image-popup.html'),
+        type: 'popup',
+        width: 1200,
+        height: 800
+      });
+    });
+    sendResponse({ success: true });
+    return true;
+  }
+
+  // 슬라이드 제목 변경
+  if (message.type === 'UPDATE_SLIDE_TITLE') {
+    if (steps[message.index]) {
+      steps[message.index].slideTitle = message.slideTitle;
+      persistSteps();
+    }
+    sendResponse({ success: true });
+    return true;
+  }
+
   // 수동 캡처 (클릭 없이 현재 화면 캡처)
+  // 캡처 토글 상태 동기화
+  if (message.type === 'SET_CAPTURE_TYPE') {
+    captureType = message.captureType;
+    chrome.storage.local.set({ captureType });
+    sendResponse({ success: true });
+    return true;
+  }
+
+  // 선택영역 캡처 시작
+  if (message.type === 'START_AREA_CAPTURE') {
+    if (!isRecording) {
+      sendResponse({ success: false });
+      return true;
+    }
+    findCaptureTarget((tab) => {
+      if (!tab) { sendResponse({ success: false }); return; }
+      // 먼저 전체 스크린샷 촬영
+      chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 80 }).then((dataUrl) => {
+        // content.js에 영역 선택 오버레이 요청
+        chrome.tabs.sendMessage(tab.id, {
+          type: 'SELECT_AREA',
+          screenshot: dataUrl,
+          viewport: { width: tab.width || 1920, height: tab.height || 1080, devicePixelRatio: 1 }
+        });
+        sendResponse({ success: true });
+      }).catch(() => sendResponse({ success: false }));
+    });
+    return true;
+  }
+
+  // 선택영역 캡처 완료 (content.js에서 좌표 전달)
+  if (message.type === 'AREA_CAPTURE_DONE') {
+    if (steps.length >= MAX_STEPS) {
+      sendResponse({ captured: false, error: `최대 ${MAX_STEPS}장까지 캡처할 수 있습니다.` });
+      return true;
+    }
+    const { screenshot, rect, viewport } = message;
+    fetch(screenshot).then(r => r.blob()).then(blob => createImageBitmap(blob)).then(bitmap => {
+      // 실제 이미지 크기 ÷ CSS viewport = 실제 배율
+      const scaleX = bitmap.width / viewport.width;
+      const scaleY = bitmap.height / viewport.height;
+      const sx = Math.round(rect.x * scaleX);
+      const sy = Math.round(rect.y * scaleY);
+      const sw = Math.max(1, Math.round(rect.w * scaleX));
+      const sh = Math.max(1, Math.round(rect.h * scaleY));
+      const canvas = new OffscreenCanvas(sw, sh);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, sw, sh);
+      return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 });
+    }).then(blob => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const croppedUrl = reader.result;
+        const step = {
+          stepNumber: steps.length + 1,
+          screenshot: croppedUrl,
+          screenshotWithMarker: croppedUrl,
+          pageUrl: message.pageUrl || '',
+          pageTitle: message.pageTitle || '',
+          tabUrl: message.pageUrl || '',
+          clickX: 0, clickY: 0,
+          elementRect: null,
+          element: { tag: '', text: '' },
+          viewport: { width: Math.round(rect.w), height: Math.round(rect.h), devicePixelRatio: 1 },
+          description: '',
+          timestamp: Date.now(),
+          markers: []
+        };
+        steps.push(step);
+        persistSteps();
+        chrome.runtime.sendMessage({ type: 'NEW_STEP', step }).catch(() => {});
+        sendResponse({ captured: true });
+      };
+      reader.readAsDataURL(blob);
+    }).catch(() => sendResponse({ captured: false }));
+    return true;
+  }
+
+  // 이미지로 슬라이드 추가
+  if (message.type === 'ADD_IMAGE_SLIDE') {
+    if (steps.length >= MAX_STEPS) {
+      sendResponse({ error: `최대 ${MAX_STEPS}장까지 추가할 수 있습니다.` });
+      return true;
+    }
+    const step = {
+      stepNumber: steps.length + 1,
+      screenshot: message.screenshot,
+      screenshotWithMarker: message.screenshot,
+      pageUrl: '',
+      pageTitle: '',
+      tabUrl: '',
+      clickX: 0, clickY: 0,
+      elementRect: null,
+      element: { tag: '', text: '' },
+      viewport: message.viewport,
+      description: '',
+      timestamp: Date.now(),
+      markers: []
+    };
+    steps.push(step);
+    persistSteps();
+    sendResponse({ step });
+    return true;
+  }
+
   if (message.type === 'MANUAL_CAPTURE') {
     if (!isRecording) {
       sendResponse({ captured: false, error: '녹화 중이 아닙니다' });
       return true;
     }
+    if (steps.length >= MAX_STEPS) {
+      sendResponse({ captured: false, error: `최대 ${MAX_STEPS}장까지 캡처할 수 있습니다.` });
+      return true;
+    }
 
-    chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
-      if (!tabs[0]) {
+    findCaptureTarget((tab) => {
+      if (!tab) {
         sendResponse({ captured: false, error: '활성 탭을 찾을 수 없습니다' });
         return;
       }
-      const tab = tabs[0];
       chrome.tabs.captureVisibleTab(tab.windowId, {
         format: 'jpeg',
         quality: 80
@@ -335,6 +589,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   // ─── 매뉴얼 저장 ───
+  // Ctrl+S 글로벌 단축키 저장
+  if (message.type === 'SAVE_JSON_SHORTCUT') {
+    if (!steps.length) {
+      sendResponse({ success: false });
+      return true;
+    }
+    // sidepanel에 저장 트리거 전달
+    chrome.runtime.sendMessage({ type: 'TRIGGER_SAVE' }).catch(() => {});
+    sendResponse({ success: true });
+    return true;
+  }
+
   if (message.type === 'SAVE_MANUAL') {
     const manual = {
       id: 'manual_' + Date.now(),
@@ -469,6 +735,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       steps.splice(to, 0, moved);
       steps.forEach((s, i) => s.stepNumber = i + 1);
       persistSteps();
+      // 사이드패널/뷰어에 순서 변경 알림
+      chrome.runtime.sendMessage({ type: 'STEPS_REORDERED' }).catch(() => {});
     }
     sendResponse({ success: true, steps });
     return true;
@@ -477,6 +745,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'CLICK_EVENT') {
     if (!isRecording) {
       sendResponse({ captured: false });
+      return true;
+    }
+    if (steps.length >= MAX_STEPS && reRecordTarget === null) {
+      sendResponse({ captured: false, error: `최대 ${MAX_STEPS}장 도달` });
       return true;
     }
 
@@ -494,7 +766,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const existingSteps = reRecordTarget.newSteps;
 
         // 화면당 1장 모드: 같은 페이지면 기존 마지막 스텝에 마커 추가
-        if (captureMode === 'per-page' && existingSteps.length > 0) {
+        if (captureMode === 'per-page' && existingSteps.length > 0 && !modeJustSwitched) {
           const lastNew = existingSteps[existingSteps.length - 1];
           const isSamePage = isSamePageUrl(lastNew.tabUrl || lastNew.pageUrl, tabUrl);
 
@@ -535,6 +807,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         // 클릭당 1장 모드 또는 새 페이지
+        modeJustSwitched = false;
         const newNum = existingSteps.length + 1;
         const markerNumber = captureMode === 'per-page' ? 1 : newNum;
 

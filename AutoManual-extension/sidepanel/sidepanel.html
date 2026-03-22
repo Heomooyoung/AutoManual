@@ -63,8 +63,13 @@
         </div>
         <div class="help-section">
           <h3>7. 단축키</h3>
-          <p><b>Ctrl+Shift+E</b> — 녹화 시작/정지 토글<br>
-             <b>PageUp/Down</b> — 세부편집에서 스텝 이동</p>
+          <p><b>Alt+E</b> — 녹화 시작/정지 토글<br>
+             <b>Alt+R</b> — 수동 캡처<br>
+             <b>Alt+1</b> — 클릭당 1장 모드<br>
+             <b>Alt+2</b> — 화면당 1장 모드<br>
+             <b>Ctrl+S</b> — 저장<br>
+             <b>PageUp/Down</b> — 세부편집에서 스텝 이동<br>
+        </p>
         </div>
         <div class="help-section help-note">
           ※ 녹화 중에는 썸네일 편집/순서변경이 잠금됩니다.<br>
@@ -134,7 +139,12 @@
         캡처
       </span>
     </button>
-    <span id="stepCount" class="step-count">0 단계</span>
+  </div>
+  <div id="captureToggle" class="capture-toggle-bar" style="display:none;">
+    <span class="capture-toggle-text left">전체</span>
+    <input type="checkbox" id="captureTypeToggle">
+    <label for="captureTypeToggle" class="capture-switch"></label>
+    <span class="capture-toggle-text right">선택</span>
   </div>
 
   <!-- 선택 모드 바 -->
@@ -171,48 +181,54 @@
   </div>
 
   <!-- 하단 버튼 -->
+  <input type="file" id="addSlideFileInput" accept="image/*" multiple style="display:none">
   <div class="bottom-bar" id="bottomBar" style="display: none;">
-    <button id="previewBtn" class="uiverse-btn btn-preview">
-      <span class="uiverse-btn__icon">
-        <svg viewBox="0 0 14 15" fill="none" xmlns="http://www.w3.org/2000/svg" class="uiverse-btn__icon-svg" width="10">
-          <path d="M13.376 11.552l-.264-10.44-10.44-.24.024 2.28 6.96-.048L.2 12.56l1.488 1.488 9.432-9.432-.048 6.912 2.304.024z" fill="currentColor"></path>
-        </svg>
-        <svg viewBox="0 0 14 15" fill="none" width="10" xmlns="http://www.w3.org/2000/svg" class="uiverse-btn__icon-svg uiverse-btn__icon-svg--copy">
-          <path d="M13.376 11.552l-.264-10.44-10.44-.24.024 2.28 6.96-.048L.2 12.56l1.488 1.488 9.432-9.432-.048 6.912 2.304.024z" fill="currentColor"></path>
-        </svg>
-      </span>
-      세부 편집
-    </button>
-    <div class="export-dropdown">
-      <div id="exportBtn" class="uiverse-btn btn-export">
-        <span class="uiverse-btn__icon">
-          <svg viewBox="0 0 14 15" fill="none" xmlns="http://www.w3.org/2000/svg" class="uiverse-btn__icon-svg" width="10">
-            <path d="M13.376 11.552l-.264-10.44-10.44-.24.024 2.28 6.96-.048L.2 12.56l1.488 1.488 9.432-9.432-.048 6.912 2.304.024z" fill="currentColor"></path>
+    <div class="bottom-icons">
+      <div class="bottom-icon-wrap addSlide">
+        <p class="bottom-icon-name">슬라이드추가</p>
+        <div class="bottom-icon-btn" id="addSlideBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="28" height="28">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
           </svg>
-          <svg viewBox="0 0 14 15" fill="none" width="10" xmlns="http://www.w3.org/2000/svg" class="uiverse-btn__icon-svg uiverse-btn__icon-svg--copy">
-            <path d="M13.376 11.552l-.264-10.44-10.44-.24.024 2.28 6.96-.048L.2 12.56l1.488 1.488 9.432-9.432-.048 6.912 2.304.024z" fill="currentColor"></path>
-          </svg>
-        </span>
-        Export
-      </div>
-      <div class="export-menu" id="exportMenu">
-        <div class="export-icons">
-          <button class="export-icon-btn html-icon" data-format="html" title="HTML">
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="16 18 22 12 16 6"/>
-              <polyline points="8 6 2 12 8 18"/>
-            </svg>
-            <span>HTML</span>
-          </button>
-          <button class="export-icon-btn ppt-icon" data-format="pptx" title="PPT">
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
-              <line x1="8" y1="21" x2="16" y2="21"/>
-              <line x1="12" y1="17" x2="12" y2="21"/>
-            </svg>
-            <span>PPT</span>
-          </button>
         </div>
+      </div>
+      <div class="bottom-icon-wrap editWrap">
+        <p class="bottom-icon-name">세부 편집</p>
+        <div class="bottom-icon-btn" id="previewBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="28" height="28">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </div>
+      </div>
+      <div class="bottom-icon-wrap exportWrap">
+        <p class="bottom-icon-name">Export</p>
+        <div class="bottom-icon-btn" id="exportBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="28" height="28">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+    <div class="export-menu" id="exportMenu">
+      <div class="export-icons">
+        <button class="export-icon-btn html-icon" data-format="html" title="HTML">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 18 22 12 16 6"/>
+            <polyline points="8 6 2 12 8 18"/>
+          </svg>
+          <span>HTML</span>
+        </button>
+        <button class="export-icon-btn ppt-icon" data-format="pptx" title="PPT">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+          <span>PPT</span>
+        </button>
       </div>
     </div>
   </div>

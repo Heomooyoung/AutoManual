@@ -26,6 +26,40 @@ body {
   min-width: 0;
 }
 
+/* 슬라이드 제목 바 */
+.slide-title-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: #ffffff;
+  border-bottom: 0.5px solid #e5e5ea;
+}
+.slide-title-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7b9e;
+  white-space: nowrap;
+}
+.slide-title-input {
+  flex: 1;
+  border: 1.5px solid #d1d1d6;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 13px;
+  color: #1a1a2e;
+  background: #f9f9fb;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.slide-title-input:focus {
+  border-color: #007aff;
+  background: #fff;
+}
+.slide-title-input::placeholder {
+  color: #c7c7cc;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -189,6 +223,13 @@ body {
   box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.3);
 }
 
+.toolbar-sep-mini {
+  width: 1px;
+  height: 16px;
+  background: #d1d1d6;
+  margin: 0 2px;
+}
+
 .badge-size-wrap {
   display: flex;
   align-items: center;
@@ -238,12 +279,44 @@ body {
 }
 
 /* -- 우측: 설명 패널 -- */
+/* 리사이즈 핸들 */
+.editor-resize-handle {
+  width: 8px;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: #e5e5ea;
+  transition: background 0.15s;
+  z-index: 5;
+}
+.editor-resize-handle:hover,
+.editor-resize-handle.active {
+  background: #d1d1d6;
+}
+.editor-resize-bar {
+  width: 3px;
+  height: 32px;
+  border-radius: 2px;
+  background: #c6c6c8;
+  transition: background 0.15s;
+}
+.editor-resize-handle:hover .editor-resize-bar,
+.editor-resize-handle.active .editor-resize-bar {
+  background: #007aff;
+}
+
 .editor-desc-panel {
   width: 320px;
+  min-width: 180px;
+  max-width: 500px;
   background: #f2f2f7;
   border-left: 0.5px solid #c6c6c8;
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
 }
 
 .desc-panel-header {

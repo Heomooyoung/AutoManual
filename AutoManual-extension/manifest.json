@@ -54,10 +54,31 @@
   "commands": {
     "toggle-recording": {
       "suggested_key": {
-        "default": "Ctrl+Shift+E",
-        "mac": "Command+Shift+E"
+        "default": "Alt+E",
+        "mac": "Alt+E"
       },
       "description": "녹화 시작/정지 토글"
+    },
+    "manual-capture": {
+      "suggested_key": {
+        "default": "Alt+R",
+        "mac": "Alt+R"
+      },
+      "description": "수동 캡처"
+    },
+    "mode-per-click": {
+      "suggested_key": {
+        "default": "Alt+1",
+        "mac": "Alt+1"
+      },
+      "description": "클릭당 1장 모드"
+    },
+    "mode-per-page": {
+      "suggested_key": {
+        "default": "Alt+2",
+        "mac": "Alt+2"
+      },
+      "description": "화면당 1장 모드"
     }
   },
 

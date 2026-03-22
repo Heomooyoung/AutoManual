@@ -72,6 +72,15 @@ function performUndo() {
   canvas.width = state.canvasW;
   canvas.height = state.canvasH;
 
+  // 이미지 어노테이션 캐시 복원
+  annotations.forEach(ann => {
+    if (ann.type === 'image' && ann.imageDataUrl && !loadedImages[ann.imageDataUrl]) {
+      const cachedImg = new Image();
+      cachedImg.onload = () => { loadedImages[ann.imageDataUrl] = cachedImg; render(); };
+      cachedImg.src = ann.imageDataUrl;
+    }
+  });
+
   const img = new Image();
   img.onload = () => {
     bgImage = img;
@@ -106,6 +115,7 @@ const toolHints = {
   text: '클릭하면 해당 위치에서 직접 텍스트를 입력할 수 있습니다',
   numbering: '클릭하면 순서대로 번호가 매겨진 원형 마커가 배치됩니다',
   blur: '드래그하여 블러 처리할 영역을 선택하세요',
+  image: '버튼 클릭 시 이미지 파일을 선택하면 캔버스에 추가됩니다',
   crop: '상/하/좌/우 경계선을 드래그하여 영역 조절 → "크롭 적용" 클릭',
   select: '마커를 클릭하여 선택 → 드래그로 이동 / Delete로 삭제'
 };
@@ -129,6 +139,16 @@ initLoad(3);
 function onStepLoaded(step) {
   bgDataUrl = step.screenshot;
   viewport = step.viewport || { width: 1920, height: 1080 };
+
+  // 슬라이드 제목 로드 (사용자가 직접 입력한 값만 표시)
+  const slideTitleInput = document.getElementById('slideTitleInput');
+  if (slideTitleInput) {
+    slideTitleInput.value = step.slideTitle || '';
+    slideTitleInput.addEventListener('change', () => {
+      chrome.runtime.sendMessage({ type: 'UPDATE_SLIDE_TITLE', index: stepIndex, slideTitle: slideTitleInput.value });
+    });
+    slideTitleInput.addEventListener('keydown', (e) => e.stopPropagation());
+  }
 
   const img = new Image();
   img.onload = () => {
@@ -220,6 +240,13 @@ document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
     document.getElementById('blurOptions').style.display = currentTool === 'blur' ? 'flex' : 'none';
 
     if (currentTool === 'crop' && !cropMode) enterCropMode();
+    if (currentTool === 'image') {
+      document.getElementById('imageFileInput').click();
+      // 이미지 추가 후 select 도구로 전환
+      setTimeout(() => {
+        document.querySelector('.tool-btn[data-tool="select"]').click();
+      }, 100);
+    }
 
     // 커서
     canvas.style.cursor = (currentTool === 'select') ? 'pointer' : 'crosshair';
@@ -234,7 +261,82 @@ document.querySelectorAll('.color-btn').forEach(btn => {
     currentDrawColor = btn.dataset.color;
     // 텍스트 도구 색상도 동기화
     document.getElementById('textColor').value = currentDrawColor;
+    // 선택된 마커가 있으면 색상 변경
+    if (selectedIndex >= 0 && annotations[selectedIndex]) {
+      saveUndoState();
+      annotations[selectedIndex].color = currentDrawColor;
+      render();
+    }
   });
+});
+
+// ── 이미지 첨부 ──
+const imageFileInput = document.getElementById('imageFileInput');
+const loadedImages = {}; // dataUrl → Image 캐시
+
+imageFileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const dataUrl = ev.target.result;
+    const img = new Image();
+    img.onload = () => {
+      loadedImages[dataUrl] = img;
+      saveUndoState();
+      // 캔버스 크기의 30%로 초기 배치
+      const maxW = canvas.width * 0.3;
+      const scale = Math.min(maxW / img.width, maxW / img.height, 1);
+      const w = img.width * scale;
+      const h = img.height * scale;
+      const x = (canvas.width - w) / 2;
+      const y = (canvas.height - h) / 2;
+      annotations.push({
+        type: 'image',
+        x, y, w, h,
+        imageDataUrl: dataUrl,
+        number: annotations.length + 1,
+        description: file.name
+      });
+      selectedIndex = annotations.length - 1;
+      render();
+      renderDescList();
+      // select 도구로 전환
+      document.querySelector('.tool-btn[data-tool="select"]').click();
+    };
+    img.src = dataUrl;
+  };
+  reader.readAsDataURL(file);
+  imageFileInput.value = ''; // 같은 파일 재선택 가능
+});
+
+// ── 리사이즈 핸들 (캔버스 ↔ 설명 패널) ──
+const editorResizeHandle = document.getElementById('editorResizeHandle');
+const editorDescPanel = document.getElementById('editorDescPanel');
+const editorLayout = document.querySelector('.editor-layout');
+let editorResizing = false;
+
+editorResizeHandle.addEventListener('mousedown', (e) => {
+  editorResizing = true;
+  editorResizeHandle.classList.add('active');
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+  e.preventDefault();
+});
+window.addEventListener('mousemove', (e) => {
+  if (!editorResizing) return;
+  const layoutRect = editorLayout.getBoundingClientRect();
+  const newWidth = layoutRect.right - e.clientX;
+  const clamped = Math.max(180, Math.min(500, newWidth));
+  editorDescPanel.style.width = clamped + 'px';
+});
+window.addEventListener('mouseup', () => {
+  if (editorResizing) {
+    editorResizing = false;
+    editorResizeHandle.classList.remove('active');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }
 });
 
 // ── Undo 버튼 ──
@@ -1082,6 +1184,17 @@ function drawShape(ctx, type, x, y, w, h, number, isPreview, ann) {
     ctx.fillText(ann.text || '', x, y);
     // 텍스트는 자체가 내용이므로 번호 배지 불필요
 
+  } else if (type === 'image' && ann) {
+    const cachedImg = loadedImages[ann.imageDataUrl];
+    if (cachedImg) {
+      ctx.drawImage(cachedImg, x, y, w, h);
+      ctx.strokeStyle = 'rgba(0,122,255,0.3)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, y, w, h);
+    }
+    ctx.restore();
+    return;
+
   } else if (type === 'numbering') {
     const sz = (ann && ann.badgeSize) || 28;
     const radius = sz / 2;
@@ -1135,8 +1248,10 @@ function renderDescList() {
     descList.innerHTML = '<div class="desc-empty">도형을 그리면 여기에 설명란이 생깁니다</div>';
     return;
   }
-  const typeNames = { rect: '사각형', arrow: '화살표', circle: '원형', text: '텍스트', numbering: '넘버링' };
+  const typeNames = { rect: '사각형', arrow: '화살표', circle: '원형', text: '텍스트', numbering: '넘버링', image: '사진' };
   annotations.forEach((ann, i) => {
+    // 텍스트, 사진은 설명란에서 제외
+    if (ann.type === 'text' || ann.type === 'image') return;
     const item = document.createElement('div');
     item.className = 'desc-item' + (selectedIndex === i ? ' desc-item-selected' : '');
     item.draggable = true;

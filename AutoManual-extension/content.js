@@ -24,6 +24,8 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 function showFullscreenFlash(text) {
+  // 최상위 프레임에서만 표시
+  if (window !== window.top) return;
   const el = document.createElement('div');
   el.style.cssText = `
     position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -138,9 +140,11 @@ function showClickFeedback(x, y) {
 // 중복 캡처 방지 (pointerdown + click 동시 발생 대응)
 let lastCaptureTime = 0;
 const CAPTURE_DEBOUNCE = 200; // 200ms 내 중복 무시
+let isAreaSelecting = false; // 영역 선택 중 플래그
 
 // 클릭 데이터를 수집하고 전송하는 핵심 함수
 function handleCapture(event) {
+  if (isAreaSelecting) return; // 영역 선택 중에는 자동 캡처 무시
   // 녹화 중이 아니면 background에 한번 더 확인 (상태 동기화 누락 대비)
   if (!isRecording) {
     chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
@@ -386,5 +390,116 @@ function findMeaningfulElement(el) {
   // 후보가 없으면 원래 요소 반환
   return el;
 }
+
+// ─── 선택영역 캡처 오버레이 ───
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === 'SELECT_AREA') {
+    showAreaSelector(message.screenshot, message.viewport);
+  }
+});
+
+function showAreaSelector(screenshot, viewport) {
+  // 최상위 프레임에서만 표시
+  if (window !== window.top) return;
+  // 이미 존재하면 제거
+  const existing = document.getElementById('__autoManualAreaSelector');
+  if (existing) existing.remove();
+  isAreaSelecting = true;
+
+  const overlay = document.createElement('div');
+  overlay.id = '__autoManualAreaSelector';
+  overlay.style.cssText = `
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    z-index: 2147483647; cursor: crosshair;
+    background: rgba(0,0,0,0.3);
+  `;
+
+  const selBox = document.createElement('div');
+  selBox.style.cssText = `
+    position: absolute; border: 2px dashed #007aff;
+    background: rgba(0,122,255,0.1); display: none;
+    pointer-events: none;
+  `;
+  overlay.appendChild(selBox);
+
+  const hint = document.createElement('div');
+  hint.textContent = '드래그하여 캡처할 영역을 선택하세요 (ESC: 취소)';
+  hint.style.cssText = `
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.8); color: #fff; padding: 8px 20px;
+    border-radius: 8px; font-size: 14px; font-weight: 600;
+    pointer-events: none; z-index: 2147483647;
+    transition: opacity 0.5s;
+  `;
+  overlay.appendChild(hint);
+  setTimeout(() => { hint.style.opacity = '0'; }, 1500);
+
+  let startX, startY, isDragging = false;
+
+  overlay.addEventListener('mousedown', (e) => {
+    startX = e.clientX;
+    startY = e.clientY;
+    isDragging = true;
+    selBox.style.display = 'block';
+    selBox.style.left = startX + 'px';
+    selBox.style.top = startY + 'px';
+    selBox.style.width = '0';
+    selBox.style.height = '0';
+  });
+
+  overlay.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const x = Math.min(e.clientX, startX);
+    const y = Math.min(e.clientY, startY);
+    const w = Math.abs(e.clientX - startX);
+    const h = Math.abs(e.clientY - startY);
+    selBox.style.left = x + 'px';
+    selBox.style.top = y + 'px';
+    selBox.style.width = w + 'px';
+    selBox.style.height = h + 'px';
+  });
+
+  overlay.addEventListener('mouseup', (e) => {
+    if (!isDragging) return;
+    isDragging = false;
+    const x = Math.min(e.clientX, startX);
+    const y = Math.min(e.clientY, startY);
+    const w = Math.abs(e.clientX - startX);
+    const h = Math.abs(e.clientY - startY);
+    overlay.remove();
+    isAreaSelecting = false;
+
+    if (w < 10 || h < 10) return; // 너무 작으면 무시
+
+    chrome.runtime.sendMessage({
+      type: 'AREA_CAPTURE_DONE',
+      screenshot,
+      rect: { x, y, w, h },
+      viewport: { width: window.innerWidth, height: window.innerHeight, devicePixelRatio: window.devicePixelRatio || 1 },
+      pageUrl: location.href,
+      pageTitle: document.title
+    });
+  });
+
+  // ESC로 취소
+  const escHandler = (e) => {
+    if (e.key === 'Escape') {
+      overlay.remove();
+      isAreaSelecting = false;
+      document.removeEventListener('keydown', escHandler);
+    }
+  };
+  document.addEventListener('keydown', escHandler);
+
+  document.body.appendChild(overlay);
+}
+
+// Ctrl+S → 매뉴얼 JSON 저장 (크롬 기본 저장 대신)
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    chrome.runtime.sendMessage({ type: 'SAVE_JSON_SHORTCUT' });
+  }
+}, true);
 
 } // end of __autoManualContentLoaded guard

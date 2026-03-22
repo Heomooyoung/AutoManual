@@ -1,18 +1,380 @@
 // ========================================
-// viewer.js — 편집 가능한 미리보기 페이지
-// 큰 화면에서 마커별 설명 편집 + 단계 관리
+// viewer.js — Google Slides 스타일 편집 뷰어
+// 좌측 썸네일 | 중앙 이미지 | 우측 설명
 // ========================================
 
 const params = new URLSearchParams(location.search);
 const title = params.get('title') || '매뉴얼';
 
 let allSteps = [];
+let selectedIndex = 0;
 let viewerReRecordIndex = null;
 
 // ── 초기 로드 ──
 loadAndRender();
 
-// ── 재녹화 배너 (동적 생성) ──
+function loadAndRender(retries) {
+  if (retries === undefined) retries = 5;
+  chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
+    if (chrome.runtime.lastError || !response?.steps?.length) {
+      if (retries > 0) { setTimeout(() => loadAndRender(retries - 1), 400); return; }
+      document.getElementById('canvasEmpty').style.display = 'block';
+      document.getElementById('mainImage').style.display = 'none';
+      document.getElementById('descPanel').style.display = 'none';
+      document.getElementById('resizeHandleH').style.display = 'none';
+      return;
+    }
+    allSteps = response.steps;
+    document.title = `${title} — 편집`;
+    if (selectedIndex >= allSteps.length) selectedIndex = allSteps.length - 1;
+    if (selectedIndex < 0) selectedIndex = 0;
+    renderSidebar();
+    renderMain();
+  });
+}
+
+// ══════════════════════════════════════
+// 좌측 사이드바
+// ══════════════════════════════════════
+let dragFrom = null;
+
+// 이전/다음 버튼
+document.getElementById('prevStepBtn').addEventListener('click', () => {
+  if (selectedIndex > 0) { selectedIndex--; renderSidebar(); renderMain(); }
+});
+document.getElementById('nextStepBtn').addEventListener('click', () => {
+  if (selectedIndex < allSteps.length - 1) { selectedIndex++; renderSidebar(); renderMain(); }
+});
+
+function updatePageIndicator() {
+  document.getElementById('pageIndicator').textContent =
+    allSteps.length > 0 ? `${selectedIndex + 1} / ${allSteps.length}` : '0 / 0';
+}
+
+// 사이드바 접기/펼치기
+const sidebar = document.getElementById('sidebar');
+const sidebarToggle = document.getElementById('sidebarToggle');
+sidebarToggle.addEventListener('click', () => {
+  sidebar.classList.toggle('collapsed');
+  sidebarToggle.classList.toggle('collapsed');
+  sidebarToggle.textContent = sidebar.classList.contains('collapsed') ? '▶' : '◀';
+});
+
+function renderSidebar() {
+  const list = document.getElementById('sidebarList');
+  list.innerHTML = '';
+  document.getElementById('slideCount').textContent = allSteps.length;
+
+  allSteps.forEach((step, i) => {
+    const item = document.createElement('div');
+    item.className = 'slide-thumb' + (i === selectedIndex ? ' active' : '');
+    item.draggable = true;
+    item.dataset.index = i;
+
+    const num = document.createElement('span');
+    num.className = 'slide-thumb-num';
+    num.textContent = i + 1;
+
+    const img = document.createElement('img');
+    img.src = step.screenshotWithMarker;
+    img.draggable = false;
+
+    item.appendChild(num);
+    item.appendChild(img);
+
+    if (step.modified) {
+      const mod = document.createElement('span');
+      mod.className = 'slide-thumb-modified';
+      mod.textContent = step.changeType === 're-recorded' ? '🔄' : '✏️';
+      item.appendChild(mod);
+    }
+
+    item.addEventListener('click', () => {
+      selectedIndex = i;
+      renderSidebar();
+      renderMain();
+    });
+
+    // 드래그 순서 변경
+    item.addEventListener('dragstart', (e) => {
+      dragFrom = i;
+      item.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', i);
+    });
+    item.addEventListener('dragend', () => {
+      item.classList.remove('dragging');
+      list.querySelectorAll('.dragover').forEach(el => el.classList.remove('dragover'));
+      dragFrom = null;
+    });
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (dragFrom !== null && dragFrom !== i) item.classList.add('dragover');
+    });
+    item.addEventListener('dragleave', () => item.classList.remove('dragover'));
+    item.addEventListener('drop', (e) => {
+      e.preventDefault();
+      item.classList.remove('dragover');
+      if (dragFrom !== null && dragFrom !== i) {
+        selectedIndex = i;
+        chrome.runtime.sendMessage({ type: 'MOVE_STEP', from: dragFrom, to: i }, () => loadAndRender());
+      }
+    });
+
+    list.appendChild(item);
+  });
+
+  setTimeout(() => {
+    const active = list.querySelector('.active');
+    if (active) active.scrollIntoView({ block: 'nearest' });
+  }, 50);
+}
+
+// ══════════════════════════════════════
+// 우측 메인 영역
+// ══════════════════════════════════════
+function renderMain() {
+  updatePageIndicator();
+  const step = allSteps[selectedIndex];
+  if (!step) {
+    document.getElementById('canvasEmpty').style.display = 'block';
+    document.getElementById('mainImage').style.display = 'none';
+    document.getElementById('descPanel').style.display = 'none';
+    document.getElementById('resizeHandleH').style.display = 'none';
+    return;
+  }
+
+  const img = document.getElementById('mainImage');
+  img.src = step.screenshotWithMarker;
+  img.style.display = 'block';
+  img.onclick = () => openImageModal(step.screenshotWithMarker);
+  img.style.cursor = 'zoom-in';
+  document.getElementById('canvasEmpty').style.display = 'none';
+
+  const titleInput = document.getElementById('slideTitle');
+  titleInput.value = step.slideTitle || '';
+  titleInput.onchange = () => {
+    chrome.runtime.sendMessage({ type: 'UPDATE_SLIDE_TITLE', index: selectedIndex, slideTitle: titleInput.value });
+  };
+
+  renderDescPanel(step, selectedIndex);
+}
+
+function renderDescPanel(step, si) {
+  const panel = document.getElementById('descPanel');
+  const handle = document.getElementById('resizeHandleH');
+  const body = document.getElementById('descPanelBody');
+
+  let markers = Array.isArray(step.markers) && step.markers.length > 0
+    ? step.markers
+    : [{ number: 1, element: step.element || { tag: '', text: '' }, description: step.description || '' }];
+
+  // 텍스트/넘버링/이미지 제외
+  const filtered = markers.filter(m => {
+    const tag = m.element?.tag;
+    return tag !== 'text' && tag !== 'numbering' && tag !== 'image';
+  });
+
+  const displayMarkers = filtered.length > 0 ? filtered : markers;
+
+  // 항상 설명 패널 표시
+  panel.style.display = 'flex';
+  handle.style.display = 'flex';
+  body.innerHTML = '';
+
+  if (displayMarkers.length === 0 || (displayMarkers.length === 1 && !displayMarkers[0].description && !step.description)) {
+    body.innerHTML = '<div class="desc-empty">마커를 추가하면 설명을 입력할 수 있습니다</div>';
+    return;
+  }
+
+  let dragMarkerFrom = null;
+
+  displayMarkers.forEach((marker, mi) => {
+    const row = document.createElement('div');
+    row.className = 'marker-row';
+    row.draggable = true;
+
+    row.addEventListener('dragstart', (e) => {
+      dragMarkerFrom = mi;
+      row.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      body.querySelectorAll('.dragover').forEach(r => r.classList.remove('dragover'));
+    });
+    row.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (dragMarkerFrom !== null && dragMarkerFrom !== mi) row.classList.add('dragover');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('dragover'));
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      row.classList.remove('dragover');
+      if (dragMarkerFrom !== null && dragMarkerFrom !== mi) {
+        const order = displayMarkers.map((_, i) => i);
+        const [moved] = order.splice(dragMarkerFrom, 1);
+        order.splice(mi, 0, moved);
+        chrome.runtime.sendMessage({ type: 'REORDER_MARKERS', stepIndex: si, newOrder: order }, () => loadAndRender());
+      }
+    });
+
+    const rowLeft = document.createElement('div');
+    rowLeft.className = 'marker-row-left';
+
+    const dragHandle = document.createElement('span');
+    dragHandle.className = 'marker-drag-handle';
+    dragHandle.textContent = '⠿';
+    rowLeft.appendChild(dragHandle);
+
+    const badge = document.createElement('span');
+    badge.className = 'marker-badge';
+    badge.textContent = mi + 1;
+    rowLeft.appendChild(badge);
+
+    if (displayMarkers.length > 1) {
+      const del = document.createElement('button');
+      del.className = 'marker-del-btn';
+      del.textContent = '삭제';
+      del.addEventListener('click', () => {
+        chrome.runtime.sendMessage({ type: 'DELETE_MARKER', stepIndex: si, markerIndex: mi }, () => loadAndRender());
+      });
+      rowLeft.appendChild(del);
+    }
+
+    const ta = document.createElement('textarea');
+    ta.className = 'marker-desc-input';
+    ta.value = marker.description || '';
+    ta.placeholder = `${mi + 1}번 마커 설명...`;
+    ta.rows = 1;
+    ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; });
+    ta.addEventListener('change', () => {
+      chrome.runtime.sendMessage({ type: 'UPDATE_MARKER_DESC', stepIndex: si, markerIndex: mi, description: ta.value });
+    });
+    setTimeout(() => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }, 10);
+
+    row.appendChild(rowLeft);
+    row.appendChild(ta);
+    body.appendChild(row);
+  });
+}
+
+// ══════════════════════════════════════
+// 리사이즈 핸들 (이미지 ↔ 설명 패널)
+// ══════════════════════════════════════
+const resizeHandle = document.getElementById('resizeHandleH');
+const descPanel = document.getElementById('descPanel');
+const contentArea = document.getElementById('contentArea');
+let isResizing = false;
+
+resizeHandle.addEventListener('mousedown', (e) => {
+  isResizing = true;
+  resizeHandle.classList.add('active');
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+  e.preventDefault();
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!isResizing) return;
+  const contentRect = contentArea.getBoundingClientRect();
+  const newWidth = contentRect.right - e.clientX;
+  const clamped = Math.max(180, Math.min(500, newWidth));
+  descPanel.style.width = clamped + 'px';
+});
+
+window.addEventListener('mouseup', () => {
+  if (isResizing) {
+    isResizing = false;
+    resizeHandle.classList.remove('active');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }
+});
+
+// ══════════════════════════════════════
+// 키보드 네비게이션
+// ══════════════════════════════════════
+document.addEventListener('keydown', (e) => {
+  if (editorModal) return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+  if (e.key === 'ArrowUp' || e.key === 'PageUp') {
+    e.preventDefault();
+    if (selectedIndex > 0) { selectedIndex--; renderSidebar(); renderMain(); }
+  }
+  if (e.key === 'ArrowDown' || e.key === 'PageDown') {
+    e.preventDefault();
+    if (selectedIndex < allSteps.length - 1) { selectedIndex++; renderSidebar(); renderMain(); }
+  }
+  if (e.key === 'Delete' && !e.ctrlKey && !e.metaKey) {
+    document.getElementById('deleteStepBtn').click();
+  }
+});
+
+// ══════════════════════════════════════
+// 편집기 모달
+// ══════════════════════════════════════
+let editorModal = null;
+
+document.getElementById('openEditorBtn').addEventListener('click', () => {
+  if (allSteps.length === 0) return;
+  openEditorModal(selectedIndex);
+});
+
+function openEditorModal(stepIndex) {
+  if (editorModal) editorModal.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'editor-modal-overlay';
+  const modal = document.createElement('div');
+  modal.className = 'editor-modal';
+  const iframe = document.createElement('iframe');
+  iframe.src = chrome.runtime.getURL('editor/editor.html') + '?step=' + stepIndex;
+  iframe.className = 'editor-modal-iframe';
+  modal.appendChild(iframe);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  editorModal = overlay;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeEditorModal(); });
+  function onEsc(e) { if (e.key === 'Escape') { closeEditorModal(); document.removeEventListener('keydown', onEsc); } }
+  document.addEventListener('keydown', onEsc);
+}
+
+function closeEditorModal() {
+  if (editorModal) { editorModal.remove(); editorModal = null; loadAndRender(); }
+}
+
+window.addEventListener('message', (e) => {
+  if (e.data?.type === 'EDITOR_MODAL_CLOSE') closeEditorModal();
+});
+
+// ══════════════════════════════════════
+// 삭제 / 닫기
+// ══════════════════════════════════════
+document.getElementById('duplicateStepBtn').addEventListener('click', () => {
+  if (allSteps.length === 0) return;
+  chrome.runtime.sendMessage({ type: 'DUPLICATE_STEP', index: selectedIndex }, (response) => {
+    if (response?.success) {
+      selectedIndex = response.newIndex;
+      loadAndRender();
+    }
+  });
+});
+
+document.getElementById('deleteStepBtn').addEventListener('click', () => {
+  if (allSteps.length === 0) return;
+  if (!confirm(`Step ${selectedIndex + 1}을 삭제하시겠습니까?`)) return;
+  chrome.runtime.sendMessage({ type: 'DELETE_STEP', index: selectedIndex }, () => {
+    if (selectedIndex >= allSteps.length - 1) selectedIndex = Math.max(0, selectedIndex - 1);
+    loadAndRender();
+  });
+});
+
+document.getElementById('closeViewerBtn').addEventListener('click', () => window.close());
+
+// ══════════════════════════════════════
+// 재녹화 배너
+// ══════════════════════════════════════
 function createReRecordBanner() {
   if (document.getElementById('viewerReRecordBanner')) return;
   const banner = document.createElement('div');
@@ -27,500 +389,31 @@ function createReRecordBanner() {
     </div>
   `;
   document.body.insertBefore(banner, document.body.firstChild);
-
   document.getElementById('viewerReRecordCancel').addEventListener('click', () => {
     chrome.runtime.sendMessage({ type: 'CANCEL_RE_RECORD' }, () => {
-      viewerReRecordIndex = null;
-      banner.style.display = 'none';
+      viewerReRecordIndex = null; banner.style.display = 'none';
     });
   });
-
   document.getElementById('viewerReRecordFinish').addEventListener('click', () => {
     chrome.runtime.sendMessage({ type: 'FINISH_RE_RECORD' }, (response) => {
-      viewerReRecordIndex = null;
-      banner.style.display = 'none';
+      viewerReRecordIndex = null; banner.style.display = 'none';
       if (response?.success) loadAndRender();
-      else alert(response?.error || '재녹화 완료 실패');
     });
   });
 }
 
-function startViewerReRecord(stepIndex, stepNumber) {
-  createReRecordBanner();
-  viewerReRecordIndex = stepIndex;
-  const banner = document.getElementById('viewerReRecordBanner');
-  const msg = document.getElementById('viewerReRecordMsg');
-  const finishBtn = document.getElementById('viewerReRecordFinish');
-  msg.textContent = `Step ${stepNumber} 재녹화 중 — 웹페이지를 클릭하세요 (0장 캡처됨)`;
-  finishBtn.style.display = 'none';
-  banner.style.display = 'flex';
-  chrome.runtime.sendMessage({ type: 'START_RE_RECORD', stepIndex });
-}
-
-function loadAndRender(retries) {
-  if (retries === undefined) retries = 5;
-  chrome.runtime.sendMessage({ type: 'GET_STEPS' }, (response) => {
-    if (chrome.runtime.lastError || !response?.steps?.length) {
-      if (retries > 0) {
-        setTimeout(() => loadAndRender(retries - 1), 400);
-        return;
-      }
-      document.getElementById('stepContainer').innerHTML =
-        '<p style="text-align:center; color:#6b7b9e; padding:60px;">미리볼 데이터가 없습니다.</p>';
-      return;
-    }
-
-    allSteps = response.steps;
-
-    document.getElementById('manualTitle').textContent = title;
-    document.getElementById('manualMeta').textContent =
-      `작성일: ${new Date().toLocaleDateString('ko-KR')} | 총 ${allSteps.length}단계`;
-    document.title = `${title} — 미리보기`;
-
-    renderSteps();
-  });
-}
-
-function renderSteps() {
-  const container = document.getElementById('stepContainer');
-  container.innerHTML = '';
-
-  allSteps.forEach((step, si) => {
-    const div = document.createElement('div');
-    div.className = 'step' + (step.modified ? ' step-modified' : '');
-
-    // ── 좌측: 헤더 + 스크린샷 ──
-    const left = document.createElement('div');
-    left.className = 'step-left';
-
-    // ── 상단 헤더 바 (Step 번호 + 제목 + 액션 버튼 한 줄) ──
-    const header = document.createElement('div');
-    header.className = 'step-header';
-
-    const headerLeft = document.createElement('div');
-    headerLeft.className = 'step-header-left';
-    const num = document.createElement('span');
-    num.className = 'step-num';
-    num.textContent = `Step ${step.stepNumber}`;
-    if (step.modified) {
-      const modBadge = document.createElement('span');
-      modBadge.className = 'step-modified-badge';
-      modBadge.textContent = step.changeType === 're-recorded' ? '🔄 재녹화됨' : '✏️ 수정됨';
-      num.appendChild(document.createTextNode(' '));
-      num.appendChild(modBadge);
-    }
-    const url = document.createElement('span');
-    url.className = 'step-url';
-    url.textContent = step.pageTitle || '';
-    headerLeft.appendChild(num);
-    headerLeft.appendChild(url);
-
-    const headerActions = document.createElement('div');
-    headerActions.className = 'step-header-actions';
-
-    const editBtn = document.createElement('button');
-    editBtn.textContent = '✏️ 편집기';
-    editBtn.addEventListener('click', () => {
-      openEditorModal(si);
-    });
-
-    const upBtn = document.createElement('button');
-    upBtn.textContent = '↑';
-    upBtn.addEventListener('click', () => {
-      chrome.runtime.sendMessage({ type: 'MOVE_STEP', from: si, to: si - 1 }, () => loadAndRender());
-    });
-
-    const downBtn = document.createElement('button');
-    downBtn.textContent = '↓';
-    downBtn.addEventListener('click', () => {
-      chrome.runtime.sendMessage({ type: 'MOVE_STEP', from: si, to: si + 1 }, () => loadAndRender());
-    });
-
-    const delBtn = document.createElement('button');
-    delBtn.className = 'del-btn';
-    delBtn.textContent = '🗑️';
-    delBtn.addEventListener('click', () => {
-      if (!confirm(`Step ${step.stepNumber}을 삭제하시겠습니까?`)) return;
-      chrome.runtime.sendMessage({ type: 'DELETE_STEP', index: si }, () => loadAndRender());
-    });
-
-    headerActions.appendChild(editBtn);
-    headerActions.appendChild(upBtn);
-    headerActions.appendChild(downBtn);
-    headerActions.appendChild(delBtn);
-
-    header.appendChild(headerLeft);
-    header.appendChild(headerActions);
-
-    const img = document.createElement('img');
-    img.src = step.screenshotWithMarker;
-    img.alt = `Step ${step.stepNumber}`;
-    img.addEventListener('click', () => openFullscreen(img.src));
-
-    left.appendChild(header);
-
-    // 변경 요약 바
-    if (step.modified && step.changeSummary) {
-      const changeBanner = document.createElement('div');
-      changeBanner.className = 'step-change-banner';
-      const typeLabel = step.changeType === 're-recorded' ? '🔄 재녹화' : '✏️ 편집';
-      const timeStr = step.modifiedAt ? new Date(step.modifiedAt).toLocaleString('ko-KR') : '';
-      changeBanner.textContent = `${typeLabel}: ${step.changeSummary} (${timeStr})`;
-      left.appendChild(changeBanner);
-    }
-
-    left.appendChild(img);
-
-    // ── 우측: 마커별 편집 가능 설명 ──
-    const right = document.createElement('div');
-    right.className = 'step-right';
-
-    const rightHeader = document.createElement('div');
-    rightHeader.className = 'step-right-header';
-    const rightTitle = document.createElement('span');
-    rightTitle.textContent = '설명';
-    rightHeader.appendChild(rightTitle);
-
-    right.appendChild(rightHeader);
-
-    // 마커 목록
-    let markers = Array.isArray(step.markers) && step.markers.length > 0
-      ? step.markers
-      : [{
-          number: 1,
-          element: step.element || { tag: '', text: '' },
-          description: step.description || ''
-        }];
-
-    // description 동기화
-    markers.forEach((m, i) => {
-      if (!m.description && step.description) {
-        const lines = step.description.split('\n');
-        const prefix = `${i + 1}. `;
-        const matched = lines.find(l => l.startsWith(prefix));
-        if (matched) m.description = matched.substring(prefix.length);
-        else if (markers.length === 1) m.description = step.description;
-      }
-    });
-
-    // 마커 드래그 상태
-    let dragMarkerFrom = null;
-
-    markers.forEach((marker, mi) => {
-      const row = document.createElement('div');
-      row.className = 'step-marker-row';
-      row.dataset.markerIndex = mi;
-      row.draggable = true;
-
-      // 드래그 이벤트
-      row.addEventListener('dragstart', (e) => {
-        dragMarkerFrom = mi;
-        row.classList.add('marker-dragging');
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', mi);
-      });
-      row.addEventListener('dragend', () => {
-        row.classList.remove('marker-dragging');
-        right.querySelectorAll('.marker-dragover').forEach(r => r.classList.remove('marker-dragover'));
-        dragMarkerFrom = null;
-      });
-      row.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        if (dragMarkerFrom !== null && dragMarkerFrom !== mi) {
-          row.classList.add('marker-dragover');
-        }
-      });
-      row.addEventListener('dragleave', () => {
-        row.classList.remove('marker-dragover');
-      });
-      row.addEventListener('drop', (e) => {
-        e.preventDefault();
-        row.classList.remove('marker-dragover');
-        if (dragMarkerFrom !== null && dragMarkerFrom !== mi) {
-          const order = markers.map((_, i) => i);
-          const [moved] = order.splice(dragMarkerFrom, 1);
-          order.splice(mi, 0, moved);
-          chrome.runtime.sendMessage({
-            type: 'REORDER_MARKERS',
-            stepIndex: si,
-            newOrder: order
-          }, () => {
-            loadAndRender();
-            // 일시적 피드백: 이동된 위치 하이라이트
-            setTimeout(() => {
-              const stepEl = container.querySelectorAll('.step')[si];
-              if (stepEl) {
-                // 캡처 이미지 깜빡임
-                const img = stepEl.querySelector('.step-left img');
-                if (img) {
-                  img.style.outline = '3px solid #007aff';
-                  img.style.outlineOffset = '-3px';
-                  img.style.transition = 'outline 0.3s';
-                  setTimeout(() => { img.style.outline = 'none'; }, 1500);
-                }
-                // 이동된 설명 행 하이라이트
-                const rows = stepEl.querySelectorAll('.step-marker-row');
-                if (rows[mi]) {
-                  rows[mi].classList.add('marker-just-moved');
-                  setTimeout(() => rows[mi].classList.remove('marker-just-moved'), 1500);
-                }
-              }
-            }, 100);
-          });
-        }
-      });
-
-      // 좌측: 번호 + 삭제 + 드래그 핸들
-      const rowLeft = document.createElement('div');
-      rowLeft.className = 'marker-row-left';
-
-      const dragHandle = document.createElement('span');
-      dragHandle.className = 'marker-drag-handle';
-      dragHandle.textContent = '⠿';
-      dragHandle.title = '드래그하여 순서 변경';
-      rowLeft.appendChild(dragHandle);
-
-      const badge = document.createElement('span');
-      badge.className = 'step-marker-badge';
-      badge.textContent = mi + 1;
-      rowLeft.appendChild(badge);
-
-      if (markers.length > 1) {
-        const mDel = document.createElement('button');
-        mDel.className = 'marker-del-small';
-        mDel.textContent = '삭제';
-        mDel.addEventListener('click', () => {
-          chrome.runtime.sendMessage({
-            type: 'DELETE_MARKER', stepIndex: si, markerIndex: mi
-          }, () => loadAndRender());
-        });
-        rowLeft.appendChild(mDel);
-      }
-
-      // 우측: 설명 편집
-      const content = document.createElement('div');
-      content.className = 'marker-content';
-
-      const ta = document.createElement('textarea');
-      ta.className = 'marker-desc-edit';
-      ta.value = marker.description || '';
-      ta.placeholder = `${mi + 1}번 마커 설명...`;
-      ta.rows = 2;
-      ta.addEventListener('change', (e) => {
-        chrome.runtime.sendMessage({
-          type: 'UPDATE_MARKER_DESC',
-          stepIndex: si,
-          markerIndex: mi,
-          description: e.target.value
-        });
-      });
-      content.appendChild(ta);
-
-      row.appendChild(rowLeft);
-      row.appendChild(content);
-      right.appendChild(row);
-    });
-
-    div.appendChild(left);
-    div.appendChild(right);
-    container.appendChild(div);
-  });
-}
-
-// ── 풀스크린 ──
-function openFullscreen(src) {
-  const overlay = document.createElement('div');
-  overlay.className = 'fullscreen-overlay';
-  const img = document.createElement('img');
-  img.src = src;
-  overlay.appendChild(img);
-  overlay.addEventListener('click', () => overlay.remove());
-  document.body.appendChild(overlay);
-}
-
-// ── 편집기 모달 ──
-let editorModal = null;
-
-function openEditorModal(stepIndex) {
-  if (editorModal) editorModal.remove();
-
-  const overlay = document.createElement('div');
-  overlay.className = 'editor-modal-overlay';
-
-  const modal = document.createElement('div');
-  modal.className = 'editor-modal';
-
-  const iframe = document.createElement('iframe');
-  iframe.src = chrome.runtime.getURL('editor/editor.html') + '?step=' + stepIndex;
-  iframe.className = 'editor-modal-iframe';
-
-  modal.appendChild(iframe);
-  overlay.appendChild(modal);
-  document.body.appendChild(overlay);
-  editorModal = overlay;
-
-  // 바깥 클릭으로 닫기
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) closeEditorModal();
-  });
-
-  // ESC로 닫기
-  function onEsc(e) {
-    if (e.key === 'Escape') { closeEditorModal(); document.removeEventListener('keydown', onEsc); }
-  }
-  document.addEventListener('keydown', onEsc);
-}
-
-function closeEditorModal() {
-  if (editorModal) {
-    editorModal.remove();
-    editorModal = null;
-    loadAndRender();
-  }
-}
-
-// ── PageUp/PageDown으로 스텝 이동 ──
-document.addEventListener('keydown', (e) => {
-  if (editorModal) return; // 편집기 모달 열려있으면 무시
-  const steps = document.querySelectorAll('.step');
-  if (!steps.length) return;
-
-  if (e.key === 'PageUp' || e.key === 'PageDown') {
-    e.preventDefault();
-    const container = document.getElementById('stepContainer');
-    const scrollTop = window.scrollY || document.documentElement.scrollTop;
-    let targetIdx = -1;
-
-    if (e.key === 'PageDown') {
-      // 현재 보이는 스텝 다음으로 이동
-      for (let i = 0; i < steps.length; i++) {
-        if (steps[i].offsetTop > scrollTop + 50) { targetIdx = i; break; }
-      }
-      if (targetIdx === -1) targetIdx = steps.length - 1;
-    } else {
-      // 현재 보이는 스텝 이전으로 이동
-      for (let i = steps.length - 1; i >= 0; i--) {
-        if (steps[i].offsetTop < scrollTop - 50) { targetIdx = i; break; }
-      }
-      if (targetIdx === -1) targetIdx = 0;
-    }
-
-    steps[targetIdx].scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
-});
-
-// 편집기 iframe에서 닫기 요청 수신
-window.addEventListener('message', (e) => {
-  if (e.data?.type === 'EDITOR_MODAL_CLOSE') {
-    closeEditorModal();
-  }
-});
-
-// ── 닫기 ──
-document.getElementById('closeViewerBtn').addEventListener('click', () => {
-  window.close();
-});
-
-// (HTML 내보내기는 사이드패널 Export에서 제공)
-
-function exportToHTML(title, steps) {
-  const html = `<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${esc(title)}</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Malgun Gothic',-apple-system,sans-serif;max-width:1100px;margin:0 auto;padding:40px 20px;background:#e8ecf4;color:#1a1a2e}
-h1{font-size:28px;margin-bottom:8px;color:#1b2a4a}
-.meta{color:#6b7b9e;font-size:13px;margin-bottom:32px}
-.step{display:flex;background:#fff;border-radius:12px;margin-bottom:24px;overflow:hidden;box-shadow:0 2px 8px rgba(27,42,74,.08);border:1px solid #c8d1e0}
-.step.modified{border:3px solid #7c3aed;box-shadow:0 4px 20px rgba(124,58,237,.2)}
-.change-banner{padding:8px 18px;background:linear-gradient(90deg,#faf5ff,#ede9fe);border-bottom:2px solid #7c3aed;border-left:4px solid #7c3aed;font-size:12px;color:#6d28d9;font-weight:600}
-.mod-badge{display:inline-block;font-size:10px;font-weight:700;color:#fff;background:#7c3aed;padding:2px 8px;border-radius:8px;margin-left:6px}
-.step-left{flex:7;min-width:0}
-.step-header{padding:12px 18px;background:#1b2a4a;display:flex;justify-content:space-between;align-items:center}
-.step-num{font-weight:700;color:#fff;font-size:13px;background:#4a90d9;padding:3px 12px;border-radius:5px}
-.step-url{font-size:11px;color:#6b7b9e}
-.step-left img{width:100%;display:block}
-.step-right{flex:3;min-width:200px;max-width:320px;background:#f4f6fa;border-left:1px solid #c8d1e0;display:flex;flex-direction:column}
-.step-right-header{padding:12px 16px;background:#2c3e6b;font-size:12px;font-weight:700;color:#fff;text-align:center}
-.marker-row{display:flex;align-items:flex-start;gap:10px;padding:10px 14px;border-bottom:1px solid #e8ecf4}
-.marker-row:last-child{border-bottom:none}
-.marker-badge{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;border-radius:50%;background:#e63232;color:#fff;font-size:11px;font-weight:700;flex-shrink:0}
-.marker-text{font-size:13px;line-height:1.6;color:#1a1a2e}
-.footer{text-align:center;color:#6b7b9e;font-size:12px;margin-top:40px;padding:24px}
-@media(max-width:768px){.step{flex-direction:column}.step-right{max-width:none;border-left:none;border-top:1px solid #c8d1e0}}
-</style>
-</head>
-<body>
-<h1>${esc(title)}</h1>
-<div class="meta">작성일: ${new Date().toLocaleDateString('ko-KR')} | 총 ${steps.length}단계</div>
-${steps.map(step => {
-  const markers = step.markers || [];
-  let descHtml;
-  if (markers.length > 0) {
-    descHtml = markers.map((m,i) =>
-      `<div class="marker-row"><span class="marker-badge">${i+1}</span><span class="marker-text">${esc(m.description||'')}</span></div>`
-    ).join('');
-  } else {
-    descHtml = `<div style="padding:16px;font-size:13px">${esc(step.description||'')}</div>`;
-  }
-  const modClass = step.modified ? ' modified' : '';
-  const modBadge = step.modified ? `<span class="mod-badge">${step.changeType==='re-recorded'?'재녹화됨':'수정됨'}</span>` : '';
-  const changeBanner = step.modified && step.changeSummary
-    ? `<div class="change-banner">${step.changeType==='re-recorded'?'🔄':'✏️'} ${esc(step.changeSummary)}${step.modifiedAt?' ('+new Date(step.modifiedAt).toLocaleString('ko-KR')+')':''}</div>`
-    : '';
-  return `<div class="step${modClass}">
-  <div class="step-left">
-    <div class="step-header">
-      <span class="step-num">Step ${step.stepNumber}${modBadge}</span>
-      <span class="step-url">${esc(step.pageTitle||'')}</span>
-    </div>
-    ${changeBanner}
-    <img src="${step.screenshotWithMarker}" alt="Step ${step.stepNumber}">
-  </div>
-  <div class="step-right">
-    <div class="step-right-header">설명</div>
-    ${descHtml}
-  </div>
-</div>`;
-}).join('\n')}
-<div class="footer">AutoManual로 생성됨</div>
-</body></html>`;
-
-  const blob = new Blob([html], { type: 'text/html; charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${title}.html`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-function esc(text) {
-  const d = document.createElement('div');
-  d.textContent = text;
-  return d.innerHTML;
-}
-
-// ── 메시지 수신 ──
+// ══════════════════════════════════════
+// 메시지 수신
+// ══════════════════════════════════════
 chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === 'EDITOR_SAVED') {
-    loadAndRender();
-  }
-  // 재녹화 진행
+  if (message.type === 'EDITOR_SAVED') loadAndRender();
+  if (message.type === 'STEPS_REORDERED') loadAndRender();
   if (message.type === 'RE_RECORD_PROGRESS') {
     const msg = document.getElementById('viewerReRecordMsg');
-    const finishBtn = document.getElementById('viewerReRecordFinish');
+    const fin = document.getElementById('viewerReRecordFinish');
     if (msg) msg.textContent = `Step ${message.stepIndex + 1} 재녹화 중 — ${message.capturedCount}장 캡처됨`;
-    if (finishBtn) finishBtn.style.display = 'inline-block';
+    if (fin) fin.style.display = 'inline-block';
   }
-  // 재녹화 완료
   if (message.type === 'RE_RECORD_DONE') {
     viewerReRecordIndex = null;
     const banner = document.getElementById('viewerReRecordBanner');
@@ -528,3 +421,60 @@ chrome.runtime.onMessage.addListener((message) => {
     loadAndRender();
   }
 });
+
+// ══════════════════════════════════════
+// 이미지 확대 모달
+// ══════════════════════════════════════
+function openImageModal(src) {
+  const existing = document.getElementById('imgModal');
+  if (existing) { existing.querySelector('.modal-img').src = src; existing.style.display = 'flex'; return; }
+
+  const modal = document.createElement('div');
+  modal.id = 'imgModal';
+  modal.style.cssText = `
+    position:fixed;top:0;left:0;right:0;bottom:0;
+    background:rgba(0,0,0,0.9);z-index:99999;
+    display:flex;align-items:center;justify-content:center;
+    flex-direction:column;
+  `;
+
+  const imgWrap = document.createElement('div');
+  imgWrap.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;width:100%;overflow:hidden;cursor:grab;';
+
+  const img = document.createElement('img');
+  img.className = 'modal-img';
+  img.src = src;
+  img.draggable = false;
+  img.style.cssText = 'max-width:95%;max-height:90%;border-radius:4px;transition:transform 0.1s;user-select:none;';
+
+  let scale = 1, panX = 0, panY = 0, dragging = false, dx, dy, spx, spy;
+  function update() { img.style.transform = `translate(${panX}px,${panY}px) scale(${scale})`; ctrl.querySelector('span').textContent = Math.round(scale*100)+'%'; }
+
+  imgWrap.addEventListener('wheel', (e) => { e.preventDefault(); scale = Math.min(8, Math.max(0.2, scale + (e.deltaY > 0 ? -0.15 : 0.15))); update(); });
+  imgWrap.addEventListener('mousedown', (e) => { if (scale <= 1) return; dragging = true; dx = e.clientX; dy = e.clientY; spx = panX; spy = panY; imgWrap.style.cursor = 'grabbing'; e.preventDefault(); });
+  window.addEventListener('mousemove', (e) => { if (!dragging) return; panX = spx + e.clientX - dx; panY = spy + e.clientY - dy; update(); });
+  window.addEventListener('mouseup', () => { dragging = false; imgWrap.style.cursor = scale > 1 ? 'grab' : 'default'; });
+
+  const ctrl = document.createElement('div');
+  ctrl.style.cssText = 'position:fixed;bottom:12px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;background:rgba(0,0,0,0.6);padding:6px 14px;border-radius:20px;z-index:100000;';
+  ctrl.innerHTML = '<button style="width:28px;height:28px;border:none;border-radius:50%;background:rgba(255,255,255,0.2);color:#fff;font-size:15px;cursor:pointer;">−</button><span style="color:#aaa;font-size:12px;min-width:44px;text-align:center;">100%</span><button style="width:28px;height:28px;border:none;border-radius:50%;background:rgba(255,255,255,0.2);color:#fff;font-size:15px;cursor:pointer;">+</button><button style="padding:4px 10px;border:none;border-radius:12px;background:rgba(255,255,255,0.2);color:#fff;font-size:11px;cursor:pointer;">1:1</button>';
+  const btns = ctrl.querySelectorAll('button');
+  btns[0].onclick = (e) => { e.stopPropagation(); scale = Math.max(0.2, scale - 0.25); update(); };
+  btns[1].onclick = (e) => { e.stopPropagation(); scale = Math.min(8, scale + 0.25); update(); };
+  btns[2].onclick = (e) => { e.stopPropagation(); scale = 1; panX = 0; panY = 0; update(); };
+  ctrl.onclick = (e) => e.stopPropagation();
+
+  imgWrap.appendChild(img);
+  modal.appendChild(imgWrap);
+  modal.appendChild(ctrl);
+  modal.addEventListener('click', (e) => { if (e.target === modal || e.target === imgWrap) modal.style.display = 'none'; });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && modal.style.display !== 'none') modal.style.display = 'none'; });
+  document.body.appendChild(modal);
+}
+
+// ── 유틸 ──
+function esc(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}

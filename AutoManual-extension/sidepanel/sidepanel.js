@@ -7,7 +7,7 @@ const recordBtn = document.getElementById('recordBtn');
 const recordBtnText = document.getElementById('recordBtnText');
 const cancelRecordBtn = document.getElementById('cancelRecordBtn');
 const completeRecordBtn = document.getElementById('completeRecordBtn');
-const stepCount = document.getElementById('stepCount');
+const stepCount = document.getElementById('stepCount') || { textContent: '' };
 const stepList = document.getElementById('stepList');
 const emptyState = document.getElementById('emptyState');
 const bottomBar = document.getElementById('bottomBar');
@@ -77,6 +77,29 @@ function sendMsgRetry(msg, retries, expectData) {
     });
   });
 }
+
+// ─── 단축키 ───
+document.addEventListener('keydown', (e) => {
+  // Ctrl+S / Cmd+S: 저장
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    saveManualBtn.click();
+    return;
+  }
+  // Alt+1: 클릭당 1장 모드
+  if (e.altKey && e.code === 'Digit1') {
+    e.preventDefault();
+    setMode('per-click');
+    return;
+  }
+  // Alt+2: 화면당 1장 모드
+  if (e.altKey && e.code === 'Digit2') {
+    e.preventDefault();
+    setMode('per-page');
+    return;
+  }
+  // Alt+R: background의 글로벌 커맨드로 처리 (중복 방지)
+});
 
 saveManualBtn.addEventListener('click', async () => {
   const title = document.getElementById('manualTitle').value || '제목 없음';
@@ -332,6 +355,11 @@ sendMsgRetry({ type: 'GET_STATUS' }, 5, false).then((response) => {
       modePerClick.classList.toggle('active', response.captureMode === 'per-click');
       modePerPage.classList.toggle('active', response.captureMode === 'per-page');
     }
+    // 캡처 토글 동기화
+    if (response.captureType) {
+      captureType = response.captureType;
+      captureTypeToggle.checked = (captureType === 'area');
+    }
     updateRecordButton();
     if (response.stepCount > 0) {
       loadSteps();
@@ -339,15 +367,32 @@ sendMsgRetry({ type: 'GET_STATUS' }, 5, false).then((response) => {
   }
 });
 
+// ─── 캡처 토글 (전체/선택영역) ───
+const captureToggle = document.getElementById('captureToggle');
+const captureTypeToggle = document.getElementById('captureTypeToggle');
+let captureType = 'full'; // 'full' | 'area'
+
+captureTypeToggle.addEventListener('change', () => {
+  captureType = captureTypeToggle.checked ? 'area' : 'full';
+  chrome.runtime.sendMessage({ type: 'SET_CAPTURE_TYPE', captureType });
+});
+
 captureBtn.addEventListener('click', () => {
   if (!isRecording) return;
   captureBtn.disabled = true;
-  chrome.runtime.sendMessage({ type: 'MANUAL_CAPTURE' }, (response) => {
-    captureBtn.disabled = false;
-    if (!response?.captured) {
-      alert(response?.error || '캡처에 실패했습니다.');
-    }
-  });
+  if (captureType === 'full') {
+    chrome.runtime.sendMessage({ type: 'MANUAL_CAPTURE' }, (response) => {
+      captureBtn.disabled = false;
+      if (!response?.captured) {
+        alert(response?.error || '캡처에 실패했습니다.');
+      }
+    });
+  } else {
+    // 선택영역 캡처: content.js에 영역 선택 요청
+    chrome.runtime.sendMessage({ type: 'START_AREA_CAPTURE' }, () => {
+      captureBtn.disabled = false;
+    });
+  }
 });
 
 // ─── 선택 모드 ───
@@ -563,6 +608,7 @@ function updateRecordButton() {
     if (dot) { dot.textContent = '⏸'; dot.classList.add('pause-icon'); }
     captureBtn.disabled = false;
     captureBtn.style.display = '';
+    captureToggle.style.display = '';
     cancelBtn.style.display = '';
     completeBtn.style.display = '';
     // 녹화 중 편집 잠금
@@ -575,6 +621,7 @@ function updateRecordButton() {
     if (dot) { dot.textContent = '▶'; dot.classList.remove('pause-icon'); dot.classList.add('play-icon'); }
     captureBtn.disabled = true;
     captureBtn.style.display = 'none';
+    captureToggle.style.display = 'none';
     cancelBtn.style.display = '';
     completeBtn.style.display = '';
     // 정지 시 편집 잠금 해제
@@ -586,6 +633,7 @@ function updateRecordButton() {
     if (dot) { dot.textContent = ''; dot.classList.remove('pause-icon', 'play-icon'); }
     captureBtn.disabled = true;
     captureBtn.style.display = 'none';
+    captureToggle.style.display = 'none';
     cancelBtn.style.display = 'none';
     completeBtn.style.display = 'none';
     // 완료 시 편집 잠금 해제
@@ -604,6 +652,10 @@ function setEditingLocked(locked) {
 // ─── 새 단계 / 업데이트 수신 ───
 // 글로벌 단축키로 토글된 경우 UI 동기화
 chrome.runtime.onMessage.addListener((message) => {
+  // Ctrl+S 글로벌 저장 트리거
+  if (message.type === 'TRIGGER_SAVE') {
+    saveManualBtn.click();
+  }
   // 글로벌 단축키 녹화 토글
   if (message.type === 'RECORDING_TOGGLED') {
     isRecording = message.isRecording;
@@ -614,6 +666,10 @@ chrome.runtime.onMessage.addListener((message) => {
     }
     updateRecordButton();
   }
+  // 글로벌 단축키 모드 전환
+  if (message.type === 'MODE_CHANGED') {
+    setMode(message.mode);
+  }
   if (message.type === 'NEW_STEP') {
     addStepCard(message.step);
     updateStepCount();
@@ -623,6 +679,10 @@ chrome.runtime.onMessage.addListener((message) => {
     refreshStepListFromBg();
   }
   // 편집기에서 저장 완료 → 사이드 패널 새로고침 + 잠금 해제
+  // 세부 편집에서 순서 변경 → 사이드패널 갱신
+  if (message.type === 'STEPS_REORDERED') {
+    refreshStepListFromBg();
+  }
   if (message.type === 'EDITOR_SAVED') {
     refreshStepListFromBg();
     if (!isRecording && !previewTabId) setEditingLocked(false);
@@ -828,8 +888,25 @@ function addStepCard(step) {
   actionBar.appendChild(downBtn);
   actionBar.appendChild(delBtn);
 
+  // ── 슬라이드 제목 편집 ──
+  const titleRow = document.createElement('div');
+  titleRow.className = 'step-thumb-title-row';
+  const titleInput = document.createElement('input');
+  titleInput.className = 'step-thumb-title-input';
+  titleInput.type = 'text';
+  titleInput.placeholder = '슬라이드 제목';
+  titleInput.value = step.slideTitle || '';
+  titleInput.addEventListener('click', (e) => e.stopPropagation());
+  titleInput.addEventListener('change', () => {
+    const currentIdx = Array.from(stepList.querySelectorAll('.step-thumb-card')).indexOf(card);
+    if (currentIdx < 0) return;
+    chrome.runtime.sendMessage({ type: 'UPDATE_SLIDE_TITLE', index: currentIdx, slideTitle: titleInput.value });
+  });
+  titleRow.appendChild(titleInput);
+
   card.appendChild(img);
   card.appendChild(numBadge);
+  card.appendChild(titleRow);
   card.appendChild(actionBar);
 
   stepList.appendChild(card);
@@ -890,9 +967,12 @@ function deleteStep(index) {
 
 // ─── 단계 순서 이동 ───
 function moveStep(from, to) {
+  const scrollTop = stepList.scrollTop;
   sendMsgRetry({ type: 'MOVE_STEP', from, to }, 3, false).then((response) => {
     if (response?.success) {
       refreshStepList(response.steps);
+      // 스크롤 위치 복원
+      stepList.scrollTop = scrollTop;
       // 이동된 카드 하이라이트
       setTimeout(() => {
         const cards = stepList.querySelectorAll('.step-thumb-card');
@@ -915,22 +995,143 @@ function updateDescription(index, description) {
   });
 }
 
-// ─── 이미지 풀스크린 보기 ───
+// ─── 이미지 모달 보기 ───
+let imageModal = null;
 function openImageFullscreen(src) {
-  const overlay = document.createElement('div');
-  overlay.style.cssText = `
-    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-    background: rgba(0,0,0,0.9); z-index: 999999;
-    display: flex; align-items: center; justify-content: center;
-    cursor: pointer;
+  // 이미 열려있으면 이미지만 교체
+  if (imageModal) {
+    imageModal.querySelector('.modal-img').src = src;
+    imageModal.querySelector('.modal-img').style.transform = '';
+    imageModal.querySelector('.modal-zoom-label').textContent = '100%';
+    imageModal.style.display = 'flex';
+    return;
+  }
+  imageModal = document.createElement('div');
+  imageModal.className = 'image-modal-overlay';
+  imageModal.innerHTML = `
+    <div class="image-modal-content">
+      <div class="modal-img-wrap">
+        <img class="modal-img" src="${src}" draggable="false">
+      </div>
+    </div>
+    <div class="image-modal-controls">
+      <button class="modal-ctrl-btn" id="modalZoomOut">−</button>
+      <span class="modal-zoom-label">100%</span>
+      <button class="modal-ctrl-btn" id="modalZoomIn">+</button>
+      <button class="modal-ctrl-btn" id="modalReset">1:1</button>
+    </div>
   `;
-  const img = document.createElement('img');
-  img.src = src;
-  img.style.cssText = 'max-width: 95%; max-height: 95%; border-radius: 8px;';
-  overlay.appendChild(img);
-  overlay.addEventListener('click', () => overlay.remove());
-  document.body.appendChild(overlay);
+  document.body.appendChild(imageModal);
+
+  const img = imageModal.querySelector('.modal-img');
+  const content = imageModal.querySelector('.image-modal-content');
+  const imgWrap = imageModal.querySelector('.modal-img-wrap');
+  const zoomLabel = imageModal.querySelector('.modal-zoom-label');
+  let scale = 1, panX = 0, panY = 0;
+  let isDragging = false, dragStartX, dragStartY, startPanX, startPanY;
+
+  function updateZoom() {
+    img.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+    zoomLabel.textContent = Math.round(scale * 100) + '%';
+    imgWrap.style.cursor = scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default';
+  }
+
+  // 드래그 이동
+  imgWrap.addEventListener('mousedown', (e) => {
+    if (scale <= 1) return;
+    isDragging = true;
+    dragStartX = e.clientX; dragStartY = e.clientY;
+    startPanX = panX; startPanY = panY;
+    imgWrap.style.cursor = 'grabbing';
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    panX = startPanX + (e.clientX - dragStartX);
+    panY = startPanY + (e.clientY - dragStartY);
+    updateZoom();
+  });
+  window.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      imgWrap.style.cursor = scale > 1 ? 'grab' : 'default';
+    }
+  });
+
+  // 배경 클릭 시 닫기
+  imageModal.addEventListener('click', (e) => {
+    if (e.target === imageModal) imageModal.style.display = 'none';
+  });
+  // 콘텐츠/컨트롤 클릭 전파 차단
+  content.addEventListener('click', (e) => e.stopPropagation());
+  imageModal.querySelector('.image-modal-controls').addEventListener('click', (e) => e.stopPropagation());
+
+  // 휠 확대/축소
+  content.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    scale = Math.min(8, Math.max(0.2, scale + (e.deltaY > 0 ? -0.15 : 0.15)));
+    updateZoom();
+  });
+
+  // 버튼
+  imageModal.querySelector('#modalZoomOut').addEventListener('click', () => {
+    scale = Math.max(0.2, scale - 0.25); updateZoom();
+  });
+  imageModal.querySelector('#modalZoomIn').addEventListener('click', () => {
+    scale = Math.min(8, scale + 0.25); updateZoom();
+  });
+  imageModal.querySelector('#modalReset').addEventListener('click', () => {
+    scale = 1; panX = 0; panY = 0; updateZoom();
+  });
+
+  // ESC로 닫기
+  document.addEventListener('keydown', function modalEsc(e) {
+    if (e.key === 'Escape' && imageModal.style.display !== 'none') {
+      imageModal.style.display = 'none';
+    }
+  });
 }
+
+// ─── 슬라이드 추가 (이미지 불러오기) ───
+const addSlideBtn = document.getElementById('addSlideBtn');
+const addSlideFileInput = document.getElementById('addSlideFileInput');
+
+addSlideBtn.addEventListener('click', () => {
+  addSlideFileInput.click();
+});
+
+addSlideFileInput.addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files);
+  if (!files.length) return;
+
+  for (const file of files) {
+    const dataUrl = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.readAsDataURL(file);
+    });
+
+    // 이미지 크기 확인
+    const imgSize = await new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve({ width: img.width, height: img.height });
+      img.src = dataUrl;
+    });
+
+    chrome.runtime.sendMessage({
+      type: 'ADD_IMAGE_SLIDE',
+      screenshot: dataUrl,
+      viewport: { width: imgSize.width, height: imgSize.height, devicePixelRatio: 1 },
+      fileName: file.name
+    }, (response) => {
+      if (response?.step) {
+        addStepCard(response.step);
+        updateStepCount();
+      }
+    });
+  }
+  addSlideFileInput.value = '';
+});
 
 // ─── 미리보기 (탭 재사용) ───
 let previewTabId = null;
@@ -1231,7 +1432,11 @@ function exportToHTML(title, steps) {
   <!-- Steps -->
   <div class="steps-container">
   ${steps.map(step => {
-    const markers = step.markers || [];
+    // 텍스트/넘버링 마커는 설명란에서 제외
+    const markers = (step.markers || []).filter(m => {
+      const tag = m.element?.tag;
+      return tag !== 'text' && tag !== 'numbering' && tag !== 'image';
+    });
     let descHtml;
     if (markers.length > 0) {
       descHtml = '<div class="marker-list">' + markers.map((m, i) => `
@@ -1254,7 +1459,7 @@ function exportToHTML(title, steps) {
       <div class="step-top-bar">
         <div class="step-header">
           <span class="step-badge">Step ${step.stepNumber}${modBadge}</span>
-          <span class="step-page-title">${escapeHtml(step.pageTitle || '')}</span>
+          <span class="step-page-title">${escapeHtml(step.slideTitle || step.pageTitle || '')}</span>
         </div>
         <div class="step-header-desc">설명</div>
       </div>
@@ -1365,16 +1570,17 @@ function exportToPPTX(title, steps) {
 
   // === 슬라이드 생성 헬퍼 (텍스트 높이 기준 자동 분할) ===
   // 설명 한 줄당 약 0.12인치, 패널 사용 가능 높이 약 3.9인치
-  const LINE_HEIGHT = 0.12; // 인치 (7pt 폰트 기준)
-  const CHARS_PER_LINE = 18; // 패널 폭 기준 한 줄 글자 수 (한글)
+  const LINE_HEIGHT = 0.14; // 인치 (7pt 폰트 + lineSpacing 1.3 기준)
+  const CHARS_PER_LINE = 13; // 패널 폭 기준 한 줄 글자 수 (한글, 보수적)
   const PANEL_USABLE_H = 3.9; // 패널 설명 영역 높이 (인치)
-  const MARKER_PADDING = 0.12; // 마커 간 여백
+  const MARKER_PADDING = 0.14; // 마커 간 여백
+  const MIN_ROW_H = 0.34; // 최소 행 높이 (일정한 간격 보장)
 
   // 마커 설명의 예상 높이 계산
   function estimateMarkerHeight(desc) {
-    if (!desc) return LINE_HEIGHT + MARKER_PADDING;
+    if (!desc) return MIN_ROW_H;
     const lines = Math.ceil(desc.length / CHARS_PER_LINE);
-    return Math.max(1, lines) * LINE_HEIGHT + MARKER_PADDING;
+    return Math.max(MIN_ROW_H, lines * LINE_HEIGHT + MARKER_PADDING);
   }
 
   // 마커를 높이 기준으로 페이지 분할
@@ -1421,11 +1627,11 @@ function exportToPPTX(title, steps) {
       color: NAVY.white, align: 'center', bold: true
     });
 
-    // 페이지 제목
-    slide.addText(step.pageTitle || '', {
+    // 페이지 제목 (사용자 지정 제목 우선)
+    slide.addText(step.slideTitle || step.pageTitle || '', {
       x: 1.5, y: 0.1, w: 7.0, h: 0.35,
-      fontSize: 10, fontFace: FONT,
-      color: NAVY.sub, align: 'left', valign: 'middle'
+      fontSize: 12, fontFace: FONT,
+      color: NAVY.sub, align: 'left', valign: 'middle', bold: true
     });
 
     // 수정됨 배지
@@ -1493,7 +1699,7 @@ function exportToPPTX(title, steps) {
         const badgeW = numStr.length >= 2 ? 0.32 : 0.22;
         const badgeH = 0.22;
         const descLines = Math.max(1, Math.ceil((item.desc || '').length / CHARS_PER_LINE));
-        const rowH = descLines * LINE_HEIGHT + MARKER_PADDING;
+        const rowH = Math.max(MIN_ROW_H, descLines * LINE_HEIGHT + MARKER_PADDING);
 
         // 홀수행 배경색 (카드 구분)
         if (isOdd(di)) {
@@ -1543,7 +1749,11 @@ function exportToPPTX(title, steps) {
 
   // === 각 단계 슬라이드 (텍스트 높이 기준 자동 분할) ===
   for (const step of steps) {
-    const markers = step.markers || [];
+    // 텍스트/넘버링 마커는 설명란에서 제외
+    const markers = (step.markers || []).filter(m => {
+      const tag = m.element?.tag;
+      return tag !== 'text' && tag !== 'numbering' && tag !== 'image';
+    });
     if (markers.length === 0) {
       addStepSlide(pptx, step, [], '');
     } else {
