@@ -54,8 +54,8 @@
   "commands": {
     "toggle-recording": {
       "suggested_key": {
-        "default": "Alt+E",
-        "mac": "Alt+E"
+        "default": "Alt+Q",
+        "mac": "Alt+Q"
       },
       "description": "녹화 시작/정지 토글"
     },
