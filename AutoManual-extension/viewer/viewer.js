@@ -38,12 +38,35 @@ function loadAndRender(retries) {
 // ══════════════════════════════════════
 let dragFrom = null;
 
+// 현재 슬라이드의 제목·마커 설명을 background에 저장
+function flushCurrentSlide() {
+  const titleInput = document.getElementById('slideTitle');
+  if (titleInput && allSteps[selectedIndex]) {
+    const val = titleInput.value;
+    if (val !== (allSteps[selectedIndex].slideTitle || '')) {
+      allSteps[selectedIndex].slideTitle = val;
+      chrome.runtime.sendMessage({ type: 'UPDATE_SLIDE_TITLE', index: selectedIndex, slideTitle: val });
+    }
+  }
+  // 마커 설명도 flush
+  const textareas = document.querySelectorAll('#descPanelBody .marker-desc-input');
+  textareas.forEach((ta, mi) => {
+    if (allSteps[selectedIndex]?.markers?.[mi]) {
+      const val = ta.value;
+      if (val !== (allSteps[selectedIndex].markers[mi].description || '')) {
+        allSteps[selectedIndex].markers[mi].description = val;
+        chrome.runtime.sendMessage({ type: 'UPDATE_MARKER_DESC', stepIndex: selectedIndex, markerIndex: mi, description: val });
+      }
+    }
+  });
+}
+
 // 이전/다음 버튼
 document.getElementById('prevStepBtn').addEventListener('click', () => {
-  if (selectedIndex > 0) { selectedIndex--; renderSidebar(); renderMain(); }
+  if (selectedIndex > 0) { flushCurrentSlide(); selectedIndex--; renderSidebar(); renderMain(); }
 });
 document.getElementById('nextStepBtn').addEventListener('click', () => {
-  if (selectedIndex < allSteps.length - 1) { selectedIndex++; renderSidebar(); renderMain(); }
+  if (selectedIndex < allSteps.length - 1) { flushCurrentSlide(); selectedIndex++; renderSidebar(); renderMain(); }
 });
 
 function updatePageIndicator() {
@@ -90,6 +113,7 @@ function renderSidebar() {
     }
 
     item.addEventListener('click', () => {
+      flushCurrentSlide();
       selectedIndex = i;
       renderSidebar();
       renderMain();
@@ -153,7 +177,11 @@ function renderMain() {
 
   const titleInput = document.getElementById('slideTitle');
   titleInput.value = step.slideTitle || '';
+  titleInput.oninput = () => {
+    allSteps[selectedIndex].slideTitle = titleInput.value;
+  };
   titleInput.onchange = () => {
+    allSteps[selectedIndex].slideTitle = titleInput.value;
     chrome.runtime.sendMessage({ type: 'UPDATE_SLIDE_TITLE', index: selectedIndex, slideTitle: titleInput.value });
   };
 
@@ -172,7 +200,7 @@ function renderDescPanel(step, si) {
   // 텍스트/넘버링/이미지 제외
   const filtered = markers.filter(m => {
     const tag = m.element?.tag;
-    return tag !== 'text' && tag !== 'numbering' && tag !== 'image';
+    return tag !== 'text' && tag !== 'image';
   });
 
   const displayMarkers = filtered.length > 0 ? filtered : markers;
@@ -187,9 +215,13 @@ function renderDescPanel(step, si) {
     return;
   }
 
+  // 매뉴얼/부가설명 분리
+  const manualMarkers = displayMarkers.map((m, i) => ({ m, origIdx: i })).filter(({ m }) => m.markerType !== 'supplementary');
+  const suppMarkers = displayMarkers.map((m, i) => ({ m, origIdx: i })).filter(({ m }) => m.markerType === 'supplementary');
+
   let dragMarkerFrom = null;
 
-  displayMarkers.forEach((marker, mi) => {
+  function createMarkerRow(marker, mi, isSup) {
     const row = document.createElement('div');
     row.className = 'marker-row';
     row.draggable = true;
@@ -224,12 +256,13 @@ function renderDescPanel(step, si) {
 
     const dragHandle = document.createElement('span');
     dragHandle.className = 'marker-drag-handle';
-    dragHandle.textContent = '⠿';
+    dragHandle.textContent = '\u2807';
     rowLeft.appendChild(dragHandle);
 
     const badge = document.createElement('span');
     badge.className = 'marker-badge';
-    badge.textContent = mi + 1;
+    badge.textContent = marker.displayLabel || (mi + 1);
+    badge.style.background = isSup ? '#007aff' : '#ff3b30';
     rowLeft.appendChild(badge);
 
     if (displayMarkers.length > 1) {
@@ -245,18 +278,43 @@ function renderDescPanel(step, si) {
     const ta = document.createElement('textarea');
     ta.className = 'marker-desc-input';
     ta.value = marker.description || '';
-    ta.placeholder = `${mi + 1}번 마커 설명...`;
+    const label = isSup ? (marker.displayLabel || '') : (mi + 1);
+    ta.placeholder = `${label}번 마커 설명...`;
     ta.rows = 1;
-    ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; });
+    ta.addEventListener('input', () => {
+      ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px';
+      if (allSteps[si]?.markers?.[mi]) allSteps[si].markers[mi].description = ta.value;
+    });
     ta.addEventListener('change', () => {
+      if (allSteps[si]?.markers?.[mi]) allSteps[si].markers[mi].description = ta.value;
       chrome.runtime.sendMessage({ type: 'UPDATE_MARKER_DESC', stepIndex: si, markerIndex: mi, description: ta.value });
     });
     setTimeout(() => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }, 10);
 
     row.appendChild(rowLeft);
     row.appendChild(ta);
-    body.appendChild(row);
-  });
+    return row;
+  }
+
+  // 매뉴얼 마커 상단 배치
+  manualMarkers.forEach(({ m, origIdx }) => body.appendChild(createMarkerRow(m, origIdx, false)));
+
+  // 구분선 (부가설명이 있을 때)
+  if (suppMarkers.length > 0 && manualMarkers.length > 0) {
+    const sep = document.createElement('div');
+    sep.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;color:#8e8e93;font-size:11px;font-weight:600;';
+    const line1 = document.createElement('span');
+    line1.style.cssText = 'flex:1;height:1px;background:#d1d1d6;';
+    const txt = document.createElement('span');
+    txt.textContent = '부가설명';
+    const line2 = document.createElement('span');
+    line2.style.cssText = 'flex:1;height:1px;background:#d1d1d6;';
+    sep.appendChild(line1); sep.appendChild(txt); sep.appendChild(line2);
+    body.appendChild(sep);
+  }
+
+  // 부가설명 마커 하단 배치
+  suppMarkers.forEach(({ m, origIdx }) => body.appendChild(createMarkerRow(m, origIdx, true)));
 }
 
 // ══════════════════════════════════════
@@ -301,11 +359,11 @@ document.addEventListener('keydown', (e) => {
 
   if (e.key === 'ArrowUp' || e.key === 'PageUp') {
     e.preventDefault();
-    if (selectedIndex > 0) { selectedIndex--; renderSidebar(); renderMain(); }
+    if (selectedIndex > 0) { flushCurrentSlide(); selectedIndex--; renderSidebar(); renderMain(); }
   }
   if (e.key === 'ArrowDown' || e.key === 'PageDown') {
     e.preventDefault();
-    if (selectedIndex < allSteps.length - 1) { selectedIndex++; renderSidebar(); renderMain(); }
+    if (selectedIndex < allSteps.length - 1) { flushCurrentSlide(); selectedIndex++; renderSidebar(); renderMain(); }
   }
   if (e.key === 'Delete' && !e.ctrlKey && !e.metaKey) {
     document.getElementById('deleteStepBtn').click();

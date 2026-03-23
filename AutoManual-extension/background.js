@@ -289,7 +289,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'UPDATE_SLIDE_TITLE') {
     if (steps[message.index]) {
       steps[message.index].slideTitle = message.slideTitle;
-      persistSteps();
+      persistStepsNow();
     }
     sendResponse({ success: true });
     return true;
@@ -473,7 +473,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .map((m, i) => `${i + 1}. ${m.description || ''}`)
         .filter(d => d.length > 3)
         .join('\n');
-      persistSteps();
+      persistStepsNow();
     }
     sendResponse({ success: true });
     return true;

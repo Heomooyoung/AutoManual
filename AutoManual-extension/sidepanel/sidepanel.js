@@ -1432,10 +1432,10 @@ function exportToHTML(title, steps) {
   <!-- Steps -->
   <div class="steps-container">
   ${steps.map(step => {
-    // 텍스트/넘버링 마커는 설명란에서 제외
+    // 텍스트/이미지 마커는 설명란에서 제외
     const markers = (step.markers || []).filter(m => {
       const tag = m.element?.tag;
-      return tag !== 'text' && tag !== 'numbering' && tag !== 'image';
+      return tag !== 'text' && tag !== 'image';
     });
     let descHtml;
     if (markers.length > 0) {
@@ -1524,7 +1524,7 @@ const NAVY = {
   sub: '6B7B9E',       // 보조 텍스트
   border: 'C8D1E0',    // 테두리
 };
-const FONT = 'Malgun Gothic'; // 맑은 고딕 (깔끔, 한글 지원)
+const FONT = 'NanumBarunGothicOTF'; // 나눔바른고딕OTF
 
 function exportToPPTX(title, steps) {
   const pptx = new PptxGenJS();
@@ -1569,18 +1569,15 @@ function exportToPPTX(title, steps) {
   });
 
   // === 슬라이드 생성 헬퍼 (텍스트 높이 기준 자동 분할) ===
-  // 설명 한 줄당 약 0.12인치, 패널 사용 가능 높이 약 3.9인치
-  const LINE_HEIGHT = 0.14; // 인치 (7pt 폰트 + lineSpacing 1.3 기준)
-  const CHARS_PER_LINE = 13; // 패널 폭 기준 한 줄 글자 수 (한글, 보수적)
-  const PANEL_USABLE_H = 3.9; // 패널 설명 영역 높이 (인치)
-  const MARKER_PADDING = 0.14; // 마커 간 여백
-  const MIN_ROW_H = 0.34; // 최소 행 높이 (일정한 간격 보장)
+  const CM = 1 / 2.54; // 1cm → 인치
+  const ROW_H = 0.6 * CM;      // 한 줄당 고정 0.6cm
+  const CHARS_PER_LINE = 22;    // 패널 폭 기준 한 줄 글자 수 (7pt, 패널폭 2.2인치)
+  const PANEL_USABLE_H = 3.9;   // 패널 설명 영역 높이 (인치)
 
   // 마커 설명의 예상 높이 계산
   function estimateMarkerHeight(desc) {
-    if (!desc) return MIN_ROW_H;
-    const lines = Math.ceil(desc.length / CHARS_PER_LINE);
-    return Math.max(MIN_ROW_H, lines * LINE_HEIGHT + MARKER_PADDING);
+    const lines = (!desc) ? 1 : Math.max(1, Math.ceil(desc.length / CHARS_PER_LINE));
+    return lines * ROW_H;
   }
 
   // 마커를 높이 기준으로 페이지 분할
@@ -1598,7 +1595,11 @@ function exportToPPTX(title, steps) {
         currentPage = [];
         currentH = 0;
       }
-      currentPage.push({ number: mi + 1, desc, estH: h });
+      currentPage.push({
+        number: mi + 1, desc, estH: h,
+        markerType: markers[mi].markerType || 'manual',
+        displayLabel: markers[mi].displayLabel || String(mi + 1)
+      });
       currentH += h;
     }
     if (currentPage.length > 0) pages.push(currentPage);
@@ -1631,7 +1632,7 @@ function exportToPPTX(title, steps) {
     slide.addText(step.slideTitle || step.pageTitle || '', {
       x: 1.5, y: 0.1, w: 7.0, h: 0.35,
       fontSize: 12, fontFace: FONT,
-      color: NAVY.sub, align: 'left', valign: 'middle', bold: true
+      color: NAVY.white, align: 'left', valign: 'middle', bold: true
     });
 
     // 수정됨 배지
@@ -1693,48 +1694,79 @@ function exportToPPTX(title, steps) {
     let curY = panelY + 0.55;
 
     if (markersSlice.length > 0) {
-      const isOdd = (i) => i % 2 === 1;
-      markersSlice.forEach((item, di) => {
-        const numStr = String(item.number);
-        const badgeW = numStr.length >= 2 ? 0.32 : 0.22;
-        const badgeH = 0.22;
-        const descLines = Math.max(1, Math.ceil((item.desc || '').length / CHARS_PER_LINE));
-        const rowH = Math.max(MIN_ROW_H, descLines * LINE_HEIGHT + MARKER_PADDING);
+      // 매뉴얼/부가설명 분리
+      const manualItems = markersSlice.filter(item => item.markerType !== 'supplementary');
+      const suppItems = markersSlice.filter(item => item.markerType === 'supplementary');
 
-        // 홀수행 배경색 (카드 구분)
-        if (isOdd(di)) {
-          slide.addShape(pptx.shapes.RECTANGLE, {
-            x: panelX + 0.05, y: curY - 0.02,
-            w: panelW - 0.1, h: rowH,
-            fill: { color: 'F2F2F7' }
+      function renderPptMarkerRows(items, isSup, startY) {
+        let y = startY;
+        items.forEach((item, di) => {
+          const label = isSup ? (item.displayLabel || String.fromCharCode(64 + di + 1)) : String(item.number);
+          const badgeW = label.length >= 2 ? 0.32 : 0.22;
+          const badgeH = 0.22;
+          const descLines = Math.max(1, Math.ceil((item.desc || '').length / CHARS_PER_LINE));
+          const rowH = descLines * ROW_H;  // 줄당 0.6cm 고정
+          const badgeColor = isSup ? '007AFF' : 'E63232';
+
+          // 홀수행 배경
+          if (di % 2 === 1) {
+            slide.addShape(pptx.shapes.RECTANGLE, {
+              x: panelX + 0.05, y: y,
+              w: panelW - 0.1, h: rowH,
+              fill: { color: 'F2F2F7' }
+            });
+          }
+
+          // 번호 배지 (세로 중간 맞춤)
+          const badgeY = y + (rowH - badgeH) / 2;
+          slide.addShape(pptx.shapes.OVAL, {
+            x: panelX + 0.12, y: badgeY,
+            w: badgeW, h: badgeH,
+            fill: { color: badgeColor }
           });
-        }
+          slide.addText(label, {
+            x: panelX + 0.12, y: badgeY,
+            w: badgeW, h: badgeH,
+            fontSize: 7, fontFace: FONT,
+            color: NAVY.white, align: 'center', valign: 'middle', bold: true
+          });
 
-        // 번호 배지
-        slide.addShape(pptx.shapes.OVAL, {
-          x: panelX + 0.12, y: curY + 0.02,
-          w: badgeW, h: badgeH,
-          fill: { color: 'E63232' }
-        });
-        slide.addText(numStr, {
-          x: panelX + 0.12, y: curY + 0.02,
-          w: badgeW, h: badgeH,
-          fontSize: 7, fontFace: FONT,
-          color: NAVY.white, align: 'center', valign: 'middle', bold: true
-        });
+          // 설명 텍스트 (세로 중간 맞춤)
+          const textX = panelX + 0.12 + badgeW + 0.06;
+          slide.addText(item.desc || '', {
+            x: textX, y: y,
+            w: panelW - (textX - panelX) - 0.1, h: rowH,
+            fontSize: 7, fontFace: FONT,
+            color: NAVY.text, valign: 'middle',
+            wrap: true, lineSpacingMultiple: 1.0
+          });
 
-        // 설명 텍스트
-        const textX = panelX + 0.12 + badgeW + 0.06;
-        slide.addText(item.desc || '', {
-          x: textX, y: curY,
-          w: panelW - (textX - panelX) - 0.1, h: rowH - 0.04,
-          fontSize: 7, fontFace: FONT,
-          color: NAVY.text, valign: 'top',
-          wrap: true, lineSpacingMultiple: 1.3
+          y += rowH;
         });
+        return y;
+      }
 
-        curY += rowH;
-      });
+      // 매뉴얼 마커 렌더
+      curY = renderPptMarkerRows(manualItems, false, curY);
+
+      // 구분선 (부가설명이 있을 때)
+      if (suppItems.length > 0 && manualItems.length > 0) {
+        slide.addShape(pptx.shapes.RECTANGLE, {
+          x: panelX + 0.1, y: curY + 0.02,
+          w: panelW - 0.2, h: 0.01,
+          fill: { color: 'C6C6C8' }
+        });
+        slide.addText('부가설명', {
+          x: panelX, y: curY + 0.04,
+          w: panelW, h: 0.2,
+          fontSize: 6, fontFace: FONT,
+          color: '8E8E93', align: 'center', valign: 'middle', bold: true
+        });
+        curY += 0.28;
+      }
+
+      // 부가설명 마커 렌더
+      curY = renderPptMarkerRows(suppItems, true, curY);
     } else {
       slide.addText(step.description || '(설명 없음)', {
         x: panelX + 0.2, y: curY,
@@ -1749,10 +1781,10 @@ function exportToPPTX(title, steps) {
 
   // === 각 단계 슬라이드 (텍스트 높이 기준 자동 분할) ===
   for (const step of steps) {
-    // 텍스트/넘버링 마커는 설명란에서 제외
+    // 텍스트/이미지 마커는 설명란에서 제외
     const markers = (step.markers || []).filter(m => {
       const tag = m.element?.tag;
-      return tag !== 'text' && tag !== 'numbering' && tag !== 'image';
+      return tag !== 'text' && tag !== 'image';
     });
     if (markers.length === 0) {
       addStepSlide(pptx, step, [], '');

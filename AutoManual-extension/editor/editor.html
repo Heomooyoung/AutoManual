@@ -62,13 +62,23 @@
         </div>
         <span class="toolbar-sep"></span>
         <div class="badge-size-wrap">
-          <select id="badgeSizeSelect" class="badge-size-select" title="번호 크기">
-            <option value="20">소</option>
-            <option value="28" selected>중</option>
-            <option value="40">대</option>
-            <option value="60">특대</option>
-          </select>
+          <label class="badge-size-label">크기</label>
+          <input type="range" id="badgeSizeSlider" min="16" max="72" value="28" step="2" class="badge-size-slider" title="번호 크기">
+          <span id="badgeSizeValue" class="badge-size-val">28</span>
         </div>
+        <span class="toolbar-sep"></span>
+        <div class="marker-type-toggle" id="markerTypeToggle">
+          <button class="marker-type-btn active" data-marker-type="manual" title="매뉴얼 (숫자, 빨강)">매뉴얼</button>
+          <button class="marker-type-btn" data-marker-type="supplementary" title="부가설명 (알파벳, 파랑)">부가</button>
+        </div>
+      </div>
+      <!-- 정렬 도구 (다중 선택 시 표시) -->
+      <div class="tool-options" id="alignOptions" style="display:none;">
+        <span style="color:#6b7b9e; font-size:11px; font-weight:600;">정렬:</span>
+        <button class="align-btn" data-align="top" title="상단 정렬">&#9650; 상단</button>
+        <button class="align-btn" data-align="bottom" title="하단 정렬">&#9660; 하단</button>
+        <button class="align-btn" data-align="left" title="좌측 정렬">&#9664; 좌측</button>
+        <button class="align-btn" data-align="right" title="우측 정렬">&#9654; 우측</button>
       </div>
       <!-- 텍스트 도구 옵션 바 -->
       <div class="tool-options" id="textOptions" style="display:none;">

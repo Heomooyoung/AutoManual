@@ -8,6 +8,7 @@ const canvas = document.getElementById('editorCanvas');
 const ctx = canvas.getContext('2d');
 const descList = document.getElementById('descList');
 const hintEl = document.getElementById('canvasHint');
+function setHint(text) { hintEl.textContent = text; }
 const canvasContainer = document.getElementById('canvasContainer');
 
 const params = new URLSearchParams(location.search);
@@ -97,14 +98,37 @@ let cropDragging = null;
 const CROP_HANDLE_HIT = 30;
 
 // ── 선택 도구 상태 ──
-let selectedIndex = -1;
+let selectedIndices = [];
 let isDraggingSelected = false;
-let dragOffsetX = 0, dragOffsetY = 0;
+let dragOffsets = []; // [{index, dx, dy}]
+
+// 다중 선택 헬퍼
+function isSelected(i) { return selectedIndices.includes(i); }
+function clearSelection() { selectedIndices = []; updateAlignToolbar(); }
+function selectSingle(i) { selectedIndices = [i]; updateAlignToolbar(); }
+function toggleSelection(i) {
+  const idx = selectedIndices.indexOf(i);
+  if (idx >= 0) selectedIndices.splice(idx, 1);
+  else selectedIndices.push(i);
+  updateAlignToolbar();
+}
+function hasSelection() { return selectedIndices.length > 0; }
+function getFirstSelected() { return selectedIndices.length > 0 ? selectedIndices[0] : -1; }
+function updateAlignToolbar() {
+  const el = document.getElementById('alignOptions');
+  if (el) el.style.display = selectedIndices.length > 1 ? 'flex' : 'none';
+}
+
+// 러버밴드 선택
+let isRubberBanding = false;
+let rubberBandStart = null;
 
 // ── 리사이즈/회전 상태 ──
 let resizeHandle = null; // 'tl','tc','tr','ml','mr','bl','bc','br','rotate'
 let resizeStartX = 0, resizeStartY = 0;
 let resizeOriginal = null; // { x, y, w, h }
+let groupResizeOriginals = null; // [{ index, x, y, w, h }] — 다중 선택 리사이즈용
+let groupResizeBounds = null; // { x, y, w, h } — 다중 선택 전체 바운딩 박스
 const HANDLE_SIZE = 8;
 const HANDLE_HIT = 12;
 
@@ -117,7 +141,7 @@ const toolHints = {
   blur: '드래그하여 블러 처리할 영역을 선택하세요',
   image: '버튼 클릭 시 이미지 파일을 선택하면 캔버스에 추가됩니다',
   crop: '상/하/좌/우 경계선을 드래그하여 영역 조절 → "크롭 적용" 클릭',
-  select: '마커를 클릭하여 선택 → 드래그로 이동 / Delete로 삭제'
+  select: '마커 클릭/드래그 선택 → 이동·크기 조절 / Delete 삭제 / Shift+클릭 다중선택'
 };
 
 // ── 초기 로드 (서비스워커 대기 후 재시도) ──
@@ -127,7 +151,7 @@ function initLoad(retries) {
       if (retries > 0) {
         setTimeout(() => initLoad(retries - 1), 300);
       } else {
-        hintEl.textContent = '데이터를 불러올 수 없습니다.';
+        setHint('데이터를 불러올 수 없습니다.');
       }
       return;
     }
@@ -162,51 +186,47 @@ function onStepLoaded(step) {
         const tag = m.element?.tag || '';
         const eRect = m.elementRect;
 
+        const mt = m.markerType || 'manual';
+        const dl = m.displayLabel || null;
         if (tag === 'text') {
-          // 텍스트 복원
           annotations.push({
             type: 'text',
-            x: m.x * imgScale,
-            y: m.y * imgScale,
-            w: 0, h: 0,
+            x: m.x * imgScale, y: m.y * imgScale, w: 0, h: 0,
             text: m.element?.text || m.description || '',
             fontSize: m.fontSize || 20,
             color: m.color || '#e63232',
             badgeSize: m.badgeSize || null,
-            number: i + 1,
-            description: m.description || m.element?.text || ''
+            number: i + 1, description: m.description || m.element?.text || '',
+            markerType: mt, displayLabel: dl
           });
         } else if (tag === 'numbering') {
-          // 넘버링 복원
           annotations.push({
             type: 'numbering',
-            x: m.x * imgScale,
-            y: m.y * imgScale,
-            w: 0, h: 0,
-            number: i + 1,
-            description: m.description || '',
-            color: m.color || null,
-            badgeSize: m.badgeSize || null
+            x: m.x * imgScale, y: m.y * imgScale, w: 0, h: 0,
+            number: i + 1, description: m.description || '',
+            color: m.color || (mt === 'supplementary' ? '#007aff' : null),
+            badgeSize: m.badgeSize || null,
+            markerType: mt, displayLabel: dl
           });
         } else if (eRect && eRect.width > 0) {
-          // rect, circle, arrow 복원
           annotations.push({
             type: tag === 'arrow' ? 'arrow' : (tag === 'circle' ? 'circle' : 'rect'),
             x: eRect.x * imgScale, y: eRect.y * imgScale,
             w: eRect.width * imgScale, h: eRect.height * imgScale,
             number: i + 1, description: m.description || '',
-            color: m.color || null,
-            badgeSize: m.badgeSize || null
+            color: m.color || (mt === 'supplementary' ? '#007aff' : null),
+            badgeSize: m.badgeSize || null,
+            markerType: mt, displayLabel: dl
           });
         } else {
-          // 폴백: 원형
           annotations.push({
             type: 'circle',
             x: (m.x * imgScale) - 20, y: (m.y * imgScale) - 20,
             w: 40, h: 40,
             number: i + 1, description: m.description || '',
-            color: m.color || null,
-            badgeSize: m.badgeSize || null
+            color: m.color || (mt === 'supplementary' ? '#007aff' : null),
+            badgeSize: m.badgeSize || null,
+            markerType: mt, displayLabel: dl
           });
         }
       });
@@ -228,11 +248,11 @@ document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
     document.querySelectorAll('.tool-btn[data-tool]').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     currentTool = btn.dataset.tool;
-    hintEl.textContent = toolHints[currentTool] || '';
+    setHint(toolHints[currentTool] || '');
 
     // 선택 해제
     if (currentTool !== 'select') {
-      selectedIndex = -1;
+      clearSelection();
       render();
     }
 
@@ -262,9 +282,11 @@ document.querySelectorAll('.color-btn').forEach(btn => {
     // 텍스트 도구 색상도 동기화
     document.getElementById('textColor').value = currentDrawColor;
     // 선택된 마커가 있으면 색상 변경
-    if (selectedIndex >= 0 && annotations[selectedIndex]) {
+    if (hasSelection()) {
       saveUndoState();
-      annotations[selectedIndex].color = currentDrawColor;
+      selectedIndices.forEach(i => {
+        if (annotations[i]) annotations[i].color = currentDrawColor;
+      });
       render();
     }
   });
@@ -296,9 +318,11 @@ imageFileInput.addEventListener('change', (e) => {
         x, y, w, h,
         imageDataUrl: dataUrl,
         number: annotations.length + 1,
-        description: file.name
+        description: file.name,
+        markerType: 'manual'
       });
-      selectedIndex = annotations.length - 1;
+      renumber();
+      selectSingle(annotations.length - 1);
       render();
       renderDescList();
       // select 도구로 전환
@@ -343,7 +367,7 @@ window.addEventListener('mouseup', () => {
 document.getElementById('undoBtn').addEventListener('click', () => {
   if (cropMode) return;
   if (activeTextInput) { cancelInlineText(); return; }
-  selectedIndex = -1;
+  clearSelection();
   performUndo();
 });
 
@@ -357,7 +381,7 @@ document.addEventListener('keydown', function ctrlZHandler(e) {
     e.preventDefault();
     e.stopImmediatePropagation();
     if (!cropMode) {
-      selectedIndex = -1;
+      clearSelection();
       performUndo();
     }
   }
@@ -373,21 +397,37 @@ document.addEventListener('keydown', function otherKeysHandler(e) {
   if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') return;
 
   // Delete/Backspace = 선택된 항목 삭제
-  if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIndex >= 0 && currentTool === 'select') {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && hasSelection() && currentTool === 'select') {
     e.preventDefault();
     saveUndoState();
-    annotations.splice(selectedIndex, 1);
+    const sorted = [...selectedIndices].sort((a, b) => b - a);
+    sorted.forEach(i => annotations.splice(i, 1));
     renumber();
-    selectedIndex = -1;
+    clearSelection();
     render();
     renderDescList();
     return;
   }
 
+  // Arrow keys = 선택된 항목 이동
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && hasSelection() && currentTool === 'select') {
+    e.preventDefault();
+    const step = e.shiftKey ? 10 : 1;
+    const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+    const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+    if (!isDraggingSelected) saveUndoState();
+    selectedIndices.forEach(i => {
+      annotations[i].x += dx;
+      annotations[i].y += dy;
+    });
+    render();
+    return;
+  }
+
   // Escape = 선택 해제
   if (e.key === 'Escape') {
-    if (selectedIndex >= 0) {
-      selectedIndex = -1;
+    if (hasSelection()) {
+      clearSelection();
       render();
       renderDescList();
     }
@@ -403,7 +443,7 @@ document.getElementById('clearBtn').addEventListener('click', () => {
   saveUndoState();
   annotations = [];
   effects = [];
-  selectedIndex = -1;
+  clearSelection();
   render();
   renderDescList();
 });
@@ -499,8 +539,10 @@ function commitInlineText() {
     annotations.push({
       type: 'text', x: input._canvasX, y: input._canvasY, w: 0, h: 0,
       text, fontSize: input._fontSize, color: input._color,
-      number: annotations.length + 1, description: text, _addedAt: Date.now()
+      number: annotations.length + 1, description: text, _addedAt: Date.now(),
+      markerType: 'manual'
     });
+    renumber();
     render();
     renderDescList();
   }
@@ -635,6 +677,61 @@ function hitTestHandle(px, py, ann) {
   return null;
 }
 
+// 다중 선택 전체 바운딩 박스 계산
+function getGroupBounds() {
+  if (selectedIndices.length < 2) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  selectedIndices.forEach(i => {
+    const b = getSelectionBounds(annotations[i]);
+    minX = Math.min(minX, b.x);
+    minY = Math.min(minY, b.y);
+    maxX = Math.max(maxX, b.x + b.w);
+    maxY = Math.max(maxY, b.y + b.h);
+  });
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+// 다중 선택 그룹 선택 표시 (리사이즈 핸들 포함)
+function drawGroupSelection() {
+  const gb = getGroupBounds();
+  if (!gb) return;
+  ctx.save();
+
+  // 그룹 외곽선
+  ctx.setLineDash([6, 3]);
+  ctx.strokeStyle = '#007aff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(gb.x - 4, gb.y - 4, gb.w + 8, gb.h + 8);
+  ctx.setLineDash([]);
+
+  // 리사이즈 핸들 (8개)
+  const padded = { x: gb.x - 4, y: gb.y - 4, w: gb.w + 8, h: gb.h + 8 };
+  const handles = getHandlePositions(padded);
+  for (const key in handles) {
+    const h = handles[key];
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#007aff';
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(h.x - HANDLE_SIZE / 2, h.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+    ctx.strokeRect(h.x - HANDLE_SIZE / 2, h.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+  }
+
+  ctx.restore();
+}
+
+// 다중 선택 그룹 핸들 히트 테스트
+function hitTestGroupHandle(px, py) {
+  const gb = getGroupBounds();
+  if (!gb) return null;
+  const padded = { x: gb.x - 4, y: gb.y - 4, w: gb.w + 8, h: gb.h + 8 };
+  const handles = getHandlePositions(padded);
+  for (const key in handles) {
+    const h = handles[key];
+    if (Math.abs(px - h.x) < HANDLE_HIT && Math.abs(py - h.y) < HANDLE_HIT) return key;
+  }
+  return null;
+}
+
 function getHandleCursor(handle) {
   const cursors = {
     tl: 'nwse-resize', tr: 'nesw-resize',
@@ -694,7 +791,7 @@ function exitCropMode() {
   const cropBar = document.getElementById('cropActionBar');
   if (cropBar) cropBar.remove();
   hintEl.style.display = '';
-  hintEl.textContent = toolHints[currentTool] || '';
+  setHint(toolHints[currentTool] || '');
   render();
 }
 
@@ -730,7 +827,7 @@ function applyCropFromMode() {
     exitCropMode();
     render();
     renderDescList();
-    hintEl.textContent = '크롭 완료!';
+    setHint('크롭 완료!');
   };
   newImg.src = tempCanvas.toDataURL('image/jpeg', 0.9);
 }
@@ -839,42 +936,72 @@ canvas.addEventListener('mousedown', (e) => {
 
   // 선택 도구
   if (currentTool === 'select') {
-    // 선택된 마커가 있으면 핸들 클릭 우선 체크
-    if (selectedIndex >= 0 && selectedIndex < annotations.length) {
-      const ann = annotations[selectedIndex];
-      const handle = hitTestHandle(px, py, ann);
-      if (handle) {
+    // 다중 선택 시 그룹 핸들 클릭 우선 체크
+    if (selectedIndices.length > 1) {
+      const gHandle = hitTestGroupHandle(px, py);
+      if (gHandle) {
         saveUndoState();
-        resizeHandle = handle;
+        resizeHandle = gHandle;
         resizeStartX = px;
         resizeStartY = py;
-        resizeOriginal = { x: ann.x, y: ann.y, w: ann.w, h: ann.h };
-        canvas.style.cursor = getHandleCursor(handle);
+        groupResizeBounds = getGroupBounds();
+        groupResizeOriginals = selectedIndices.map(i => {
+          const ann = annotations[i];
+          return { index: i, x: ann.x, y: ann.y, w: ann.w, h: ann.h };
+        });
+        canvas.style.cursor = getHandleCursor(gHandle);
         return;
+      }
+    }
+
+    // 단일 선택 시 핸들 클릭 우선 체크
+    if (selectedIndices.length === 1) {
+      const ann = annotations[selectedIndices[0]];
+      if (ann) {
+        const handle = hitTestHandle(px, py, ann);
+        if (handle) {
+          saveUndoState();
+          resizeHandle = handle;
+          resizeStartX = px;
+          resizeStartY = py;
+          resizeOriginal = { x: ann.x, y: ann.y, w: ann.w, h: ann.h };
+          canvas.style.cursor = getHandleCursor(handle);
+          return;
+        }
       }
     }
 
     const idx = hitTest(px, py);
     if (idx >= 0) {
-      // 이미 선택된 마커를 다시 클릭 → 드래그 이동
-      if (selectedIndex === idx) {
+      if (e.shiftKey) {
+        // Shift+클릭: 토글 선택
+        toggleSelection(idx);
+      } else if (isSelected(idx)) {
+        // 이미 선택된 항목 클릭 → 드래그 이동
         isDraggingSelected = true;
         saveUndoState();
-        const ann = annotations[idx];
-        dragOffsetX = px - ann.x;
-        dragOffsetY = py - ann.y;
+        dragOffsets = selectedIndices.map(i => ({
+          index: i, dx: px - annotations[i].x, dy: px - annotations[i].y
+        }));
+        // y offset도 제대로 저장
+        dragOffsets = selectedIndices.map(i => ({
+          index: i, dx: px - annotations[i].x, dy: py - annotations[i].y
+        }));
         canvas.style.cursor = 'grabbing';
         return;
+      } else {
+        // 새 단일 선택
+        selectSingle(idx);
       }
-      // 새 마커 선택
-      selectedIndex = idx;
       canvas.style.cursor = 'grab';
-    } else {
-      selectedIndex = -1;
-      canvas.style.cursor = 'pointer';
+    } else if (!e.shiftKey) {
+      // 빈 공간 클릭 → 러버밴드 시작
+      clearSelection();
+      rubberBandStart = { x: px, y: py };
+      isRubberBanding = true;
+      canvas.style.cursor = 'crosshair';
     }
     render();
-    if (selectedIndex >= 0) drawSelection(annotations[selectedIndex]);
     renderDescList();
     return;
   }
@@ -890,11 +1017,14 @@ canvas.addEventListener('mousedown', (e) => {
   if (currentTool === 'numbering') {
     saveUndoState();
     const nextNum = annotations.length + 1;
+    const nColor = currentMarkerType === 'supplementary' ? '#007aff' : currentDrawColor;
     annotations.push({
       type: 'numbering', x: px, y: py, w: 0, h: 0,
       number: nextNum, description: '', _addedAt: Date.now(),
-      badgeSize: getBadgeSize(), color: currentDrawColor
+      badgeSize: getBadgeSize(), color: nColor,
+      markerType: currentMarkerType
     });
+    renumber();
     render();
     renderDescList();
     return;
@@ -928,44 +1058,112 @@ canvas.addEventListener('mousemove', (e) => {
     return;
   }
 
-  // 선택 도구 — 리사이즈/회전 드래그 중
-  if (currentTool === 'select' && resizeHandle && selectedIndex >= 0) {
-    const ann = annotations[selectedIndex];
+  // 선택 도구 — 다중 리사이즈 드래그 중
+  if (currentTool === 'select' && resizeHandle && groupResizeOriginals && selectedIndices.length > 1) {
     const dx = curX - resizeStartX;
     const dy = curY - resizeStartY;
-    const o = resizeOriginal;
+    const gb = groupResizeBounds;
 
-    {
-      // 리사이즈
-      if (resizeHandle.includes('l')) { ann.x = o.x + dx; ann.w = o.w - dx; }
-      if (resizeHandle.includes('r')) { ann.w = o.w + dx; }
-      if (resizeHandle.includes('t')) { ann.y = o.y + dy; ann.h = o.h - dy; }
-      if (resizeHandle.includes('b')) { ann.h = o.h + dy; }
-    }
+    // 새 그룹 바운딩 박스 계산
+    let newX = gb.x, newY = gb.y, newW = gb.w, newH = gb.h;
+    if (resizeHandle.includes('l')) { newX = gb.x + dx; newW = gb.w - dx; }
+    if (resizeHandle.includes('r')) { newW = gb.w + dx; }
+    if (resizeHandle.includes('t')) { newY = gb.y + dy; newH = gb.h - dy; }
+    if (resizeHandle.includes('b')) { newH = gb.h + dy; }
+
+    // 최소 크기 보장
+    if (Math.abs(newW) < 20 || Math.abs(newH) < 20) { render(); return; }
+
+    const scaleX = newW / gb.w;
+    const scaleY = newH / gb.h;
+
+    groupResizeOriginals.forEach(orig => {
+      const ann = annotations[orig.index];
+      if (ann.type === 'numbering') {
+        // 넘버링: 위치만 비례 이동
+        ann.x = newX + (orig.x - gb.x) * scaleX;
+        ann.y = newY + (orig.y - gb.y) * scaleY;
+      } else if (ann.type === 'text') {
+        // 텍스트: 위치 비례 이동 + 폰트 크기 비례 조절
+        ann.x = newX + (orig.x - gb.x) * scaleX;
+        ann.y = newY + (orig.y - gb.y) * scaleY;
+      } else {
+        // rect, circle, arrow, image: 위치 + 크기 비례 조절
+        ann.x = newX + (orig.x - gb.x) * scaleX;
+        ann.y = newY + (orig.y - gb.y) * scaleY;
+        ann.w = orig.w * scaleX;
+        ann.h = orig.h * scaleY;
+      }
+    });
     render();
-    drawSelection(ann);
     return;
   }
 
-  // 선택 도구 — 핸들 호버 시 커서 변경
-  if (currentTool === 'select' && !isDraggingSelected && !resizeHandle && selectedIndex >= 0) {
-    const ann = annotations[selectedIndex];
-    const handle = hitTestHandle(curX, curY, ann);
-    if (handle) {
-      canvas.style.cursor = getHandleCursor(handle);
+  // 선택 도구 — 단일 리사이즈 드래그 중
+  if (currentTool === 'select' && resizeHandle && selectedIndices.length === 1) {
+    const ann = annotations[selectedIndices[0]];
+    const dx = curX - resizeStartX;
+    const dy = curY - resizeStartY;
+    const o = resizeOriginal;
+    if (resizeHandle.includes('l')) { ann.x = o.x + dx; ann.w = o.w - dx; }
+    if (resizeHandle.includes('r')) { ann.w = o.w + dx; }
+    if (resizeHandle.includes('t')) { ann.y = o.y + dy; ann.h = o.h - dy; }
+    if (resizeHandle.includes('b')) { ann.h = o.h + dy; }
+    render();
+    return;
+  }
+
+  // 선택 도구 — 핸들 호버 시 커서 변경 (다중 선택)
+  if (currentTool === 'select' && !isDraggingSelected && !resizeHandle && !isRubberBanding && selectedIndices.length > 1) {
+    const gHandle = hitTestGroupHandle(curX, curY);
+    if (gHandle) {
+      canvas.style.cursor = getHandleCursor(gHandle);
     } else {
       const idx = hitTest(curX, curY);
       canvas.style.cursor = idx >= 0 ? 'grab' : 'default';
     }
   }
 
-  // 선택 도구 드래그 이동
-  if (currentTool === 'select' && isDraggingSelected && selectedIndex >= 0) {
-    const ann = annotations[selectedIndex];
-    ann.x = curX - dragOffsetX;
-    ann.y = curY - dragOffsetY;
+  // 선택 도구 — 핸들 호버 시 커서 변경 (단일 선택)
+  if (currentTool === 'select' && !isDraggingSelected && !resizeHandle && !isRubberBanding && selectedIndices.length === 1) {
+    const ann = annotations[selectedIndices[0]];
+    if (ann) {
+      const handle = hitTestHandle(curX, curY, ann);
+      if (handle) {
+        canvas.style.cursor = getHandleCursor(handle);
+      } else {
+        const idx = hitTest(curX, curY);
+        canvas.style.cursor = idx >= 0 ? 'grab' : 'default';
+      }
+    }
+  }
+
+  // 선택 도구 — 러버밴드 드래그
+  if (currentTool === 'select' && isRubberBanding && rubberBandStart) {
     render();
-    drawSelection(ann);
+    const rx = Math.min(rubberBandStart.x, curX);
+    const ry = Math.min(rubberBandStart.y, curY);
+    const rw = Math.abs(curX - rubberBandStart.x);
+    const rh = Math.abs(curY - rubberBandStart.y);
+    ctx.save();
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = 'rgba(0, 122, 255, 0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(rx, ry, rw, rh);
+    ctx.fillStyle = 'rgba(0, 122, 255, 0.08)';
+    ctx.fillRect(rx, ry, rw, rh);
+    ctx.setLineDash([]);
+    ctx.restore();
+    return;
+  }
+
+  // 선택 도구 — 다중 드래그 이동
+  if (currentTool === 'select' && isDraggingSelected && hasSelection()) {
+    dragOffsets.forEach(({ index, dx, dy }) => {
+      annotations[index].x = curX - dx;
+      annotations[index].y = curY - dy;
+    });
+    render();
     return;
   }
 
@@ -986,13 +1184,39 @@ canvas.addEventListener('mouseup', (e) => {
     return;
   }
 
-  // 선택 도구 — 리사이즈/회전 종료
+  // 선택 도구 — 리사이즈 종료
   if (currentTool === 'select' && resizeHandle) {
     resizeHandle = null;
     resizeOriginal = null;
+    groupResizeOriginals = null;
+    groupResizeBounds = null;
     canvas.style.cursor = 'grab';
     render();
-    if (selectedIndex >= 0) drawSelection(annotations[selectedIndex]);
+    renderDescList();
+    return;
+  }
+
+  // 선택 도구 — 러버밴드 종료
+  if (currentTool === 'select' && isRubberBanding && rubberBandStart) {
+    const r2 = canvas.getBoundingClientRect();
+    const sx2 = canvas.width / r2.width, sy2 = canvas.height / r2.height;
+    const endX2 = (e.clientX - r2.left) * sx2, endY2 = (e.clientY - r2.top) * sy2;
+    const rx = Math.min(rubberBandStart.x, endX2);
+    const ry = Math.min(rubberBandStart.y, endY2);
+    const rw = Math.abs(endX2 - rubberBandStart.x);
+    const rh = Math.abs(endY2 - rubberBandStart.y);
+    isRubberBanding = false;
+    rubberBandStart = null;
+    if (rw > 5 || rh > 5) {
+      annotations.forEach((ann, i) => {
+        const b = getSelectionBounds(ann);
+        if (rectsIntersect(rx, ry, rw, rh, b.x, b.y, b.w, b.h)) {
+          if (!selectedIndices.includes(i)) selectedIndices.push(i);
+        }
+      });
+      updateAlignToolbar();
+    }
+    render();
     renderDescList();
     return;
   }
@@ -1000,9 +1224,9 @@ canvas.addEventListener('mouseup', (e) => {
   // 선택 도구 드래그 종료
   if (currentTool === 'select' && isDraggingSelected) {
     isDraggingSelected = false;
+    dragOffsets = [];
     canvas.style.cursor = 'grab';
     render();
-    if (selectedIndex >= 0) drawSelection(annotations[selectedIndex]);
     renderDescList();
     return;
   }
@@ -1039,11 +1263,14 @@ canvas.addEventListener('mouseup', (e) => {
   }
 
   saveUndoState();
+  const shapeColor = currentMarkerType === 'supplementary' ? '#007aff' : currentDrawColor;
   annotations.push({
     type: currentTool, x: startX, y: startY, w, h,
     number: annotations.length + 1, description: '', _addedAt: Date.now(),
-    color: currentDrawColor, badgeSize: getBadgeSize()
+    color: shapeColor, badgeSize: getBadgeSize(),
+    markerType: currentMarkerType
   });
+  renumber();
   render();
   renderDescList();
 });
@@ -1051,8 +1278,9 @@ canvas.addEventListener('mouseup', (e) => {
 canvas.addEventListener('mouseleave', () => {
   if (isDrawing) { isDrawing = false; render(); }
   if (cropMode && cropDragging) { cropDragging = null; canvas.style.cursor = 'default'; }
-  if (isDraggingSelected) { isDraggingSelected = false; canvas.style.cursor = 'pointer'; }
-  if (resizeHandle) { resizeHandle = null; resizeOriginal = null; }
+  if (isDraggingSelected) { isDraggingSelected = false; dragOffsets = []; canvas.style.cursor = 'pointer'; }
+  if (isRubberBanding) { isRubberBanding = false; rubberBandStart = null; render(); }
+  if (resizeHandle) { resizeHandle = null; resizeOriginal = null; groupResizeOriginals = null; groupResizeBounds = null; }
 });
 
 // ══════════════════════════════════════
@@ -1113,7 +1341,11 @@ function drawBlurPreview(ctx, x, y, w, h) {
 // 렌더링
 // ══════════════════════════════════════
 function getBadgeSize() {
-  return parseInt(document.getElementById('badgeSizeSelect').value, 10) || 22;
+  return parseInt(document.getElementById('badgeSizeSlider').value, 10) || 28;
+}
+
+function rectsIntersect(x1, y1, w1, h1, x2, y2, w2, h2) {
+  return !(x1 + w1 < x2 || x2 + w2 < x1 || y1 + h1 < y2 || y2 + h2 < y1);
 }
 
 function render() {
@@ -1124,8 +1356,14 @@ function render() {
     drawShape(ctx, ann.type, ann.x, ann.y, ann.w, ann.h, ann.number, false, ann);
   });
   // 선택 표시
-  if (selectedIndex >= 0 && selectedIndex < annotations.length && currentTool === 'select') {
-    drawSelection(annotations[selectedIndex]);
+  if (hasSelection() && currentTool === 'select') {
+    selectedIndices.forEach(i => {
+      if (i >= 0 && i < annotations.length) drawSelection(annotations[i]);
+    });
+    // 다중 선택 시 그룹 바운딩 박스 + 리사이즈 핸들
+    if (selectedIndices.length > 1) {
+      drawGroupSelection();
+    }
   }
 }
 
@@ -1209,7 +1447,7 @@ function drawShape(ctx, type, x, y, w, h, number, isPreview, ann) {
     ctx.fillStyle = '#ffffff';
     ctx.font = `bold ${fontSize}px -apple-system, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(String(number), x, y);
+    ctx.fillText(ann.displayLabel || String(number), x, y);
     ctx.restore();
     return;
   }
@@ -1227,14 +1465,25 @@ function drawShape(ctx, type, x, y, w, h, number, isPreview, ann) {
     ctx.fillStyle = '#fff';
     ctx.font = `bold ${fontSize}px -apple-system, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(String(number), bx+sz/2, by+sz/2);
+    ctx.fillText(ann.displayLabel || String(number), bx+sz/2, by+sz/2);
   }
 
   ctx.restore();
 }
 
 function renumber() {
-  annotations.forEach((ann, i) => ann.number = i + 1);
+  let manualNum = 0, suppNum = 0;
+  annotations.forEach(ann => {
+    if (ann.markerType === 'supplementary') {
+      suppNum++;
+      ann.number = suppNum;
+      ann.displayLabel = String.fromCharCode(64 + suppNum); // A, B, C...
+    } else {
+      manualNum++;
+      ann.number = manualNum;
+      ann.displayLabel = String(manualNum);
+    }
+  });
 }
 
 // ══════════════════════════════════════
@@ -1249,15 +1498,18 @@ function renderDescList() {
     return;
   }
   const typeNames = { rect: '사각형', arrow: '화살표', circle: '원형', text: '텍스트', numbering: '넘버링', image: '사진' };
-  annotations.forEach((ann, i) => {
-    // 텍스트, 사진은 설명란에서 제외
-    if (ann.type === 'text' || ann.type === 'image') return;
+
+  // 매뉴얼/부가설명 분리
+  const visibleAnns = annotations.map((ann, i) => ({ ann, i })).filter(({ ann }) => ann.type !== 'text' && ann.type !== 'image');
+  const manualAnns = visibleAnns.filter(({ ann }) => ann.markerType !== 'supplementary');
+  const suppAnns = visibleAnns.filter(({ ann }) => ann.markerType === 'supplementary');
+
+  function renderDescItem(ann, i) {
     const item = document.createElement('div');
-    item.className = 'desc-item' + (selectedIndex === i ? ' desc-item-selected' : '');
+    item.className = 'desc-item' + (isSelected(i) ? ' desc-item-selected' : '');
     item.draggable = true;
     item.dataset.descIndex = i;
 
-    // 드래그 순서 변경
     item.addEventListener('dragstart', (e) => {
       descDragFrom = i;
       item.classList.add('desc-dragging');
@@ -1272,9 +1524,7 @@ function renderDescList() {
     item.addEventListener('dragover', (e) => {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      if (descDragFrom !== null && descDragFrom !== i) {
-        item.classList.add('desc-dragover');
-      }
+      if (descDragFrom !== null && descDragFrom !== i) item.classList.add('desc-dragover');
     });
     item.addEventListener('dragleave', () => item.classList.remove('desc-dragover'));
     item.addEventListener('drop', (e) => {
@@ -1285,19 +1535,15 @@ function renderDescList() {
         const [moved] = annotations.splice(descDragFrom, 1);
         annotations.splice(i, 0, moved);
         renumber();
-        if (selectedIndex === descDragFrom) selectedIndex = i;
-        else if (selectedIndex > descDragFrom && selectedIndex <= i) selectedIndex--;
-        else if (selectedIndex < descDragFrom && selectedIndex >= i) selectedIndex++;
+        // 선택 인덱스 업데이트
+        selectedIndices = selectedIndices.map(si => {
+          if (si === descDragFrom) return i;
+          if (descDragFrom < i) { if (si > descDragFrom && si <= i) return si - 1; }
+          else { if (si >= i && si < descDragFrom) return si + 1; }
+          return si;
+        });
         render();
         renderDescList();
-        // 피드백: 이동된 항목 하이라이트
-        setTimeout(() => {
-          const items = descList.querySelectorAll('.desc-item');
-          if (items[i]) {
-            items[i].classList.add('desc-just-moved');
-            setTimeout(() => items[i].classList.remove('desc-just-moved'), 1500);
-          }
-        }, 50);
       }
     });
 
@@ -1306,29 +1552,54 @@ function renderDescList() {
 
     const dragHandle = document.createElement('span');
     dragHandle.className = 'desc-drag-handle';
-    dragHandle.textContent = '⠿';
+    dragHandle.textContent = '\u2807';
     dragHandle.title = '드래그하여 순서 변경';
 
     const badge = document.createElement('span');
     badge.className = 'desc-badge';
-    badge.textContent = ann.number;
+    badge.textContent = ann.displayLabel || ann.number;
+    badge.style.background = ann.markerType === 'supplementary' ? '#007aff' : '#ff3b30';
 
     const typeLbl = document.createElement('span');
     typeLbl.className = 'desc-type';
     typeLbl.textContent = typeNames[ann.type] || ann.type;
 
-    // 선택 버튼
+    // 매뉴얼/부가설명 토글
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'desc-marker-toggle';
+    toggleBtn.textContent = ann.markerType === 'supplementary' ? '부가' : '매뉴얼';
+    toggleBtn.style.background = ann.markerType === 'supplementary' ? '#007aff' : '#e63232';
+    toggleBtn.addEventListener('click', () => {
+      saveUndoState();
+      const wasSupp = ann.markerType === 'supplementary';
+      ann.markerType = wasSupp ? 'manual' : 'supplementary';
+      ann.color = ann.markerType === 'supplementary' ? '#007aff' : '#e63232';
+
+      // 부가설명으로 변경 시 맨 아래로 이동
+      if (!wasSupp) {
+        const idx = annotations.indexOf(ann);
+        if (idx >= 0) {
+          annotations.splice(idx, 1);
+          annotations.push(ann);
+          clearSelection();
+        }
+      }
+      renumber();
+      render();
+      renderDescList();
+    });
+
     const selectBtn = document.createElement('button');
     selectBtn.className = 'desc-select-btn';
     selectBtn.textContent = '선택';
     selectBtn.addEventListener('click', () => {
-      selectedIndex = i;
+      selectSingle(i);
       currentTool = 'select';
       document.querySelectorAll('.tool-btn[data-tool]').forEach(b => {
         b.classList.toggle('active', b.dataset.tool === 'select');
       });
       canvas.style.cursor = 'pointer';
-      hintEl.textContent = toolHints.select;
+      setHint(toolHints.select);
       render();
       renderDescList();
     });
@@ -1340,8 +1611,8 @@ function renderDescList() {
       saveUndoState();
       annotations.splice(i, 1);
       renumber();
-      if (selectedIndex === i) selectedIndex = -1;
-      else if (selectedIndex > i) selectedIndex--;
+      selectedIndices = selectedIndices.filter(si => si !== i).map(si => si > i ? si - 1 : si);
+      updateAlignToolbar();
       render();
       renderDescList();
     });
@@ -1349,18 +1620,34 @@ function renderDescList() {
     header.appendChild(dragHandle);
     header.appendChild(badge);
     header.appendChild(typeLbl);
+    header.appendChild(toggleBtn);
     header.appendChild(selectBtn);
     header.appendChild(delBtn);
 
     const ta = document.createElement('textarea');
-    ta.placeholder = `${ann.number}번 설명...`;
+    const label = ann.markerType === 'supplementary' ? ann.displayLabel : ann.number;
+    ta.placeholder = `${label}번 설명...`;
     ta.value = ann.description || (ann.type === 'text' ? ann.text : '');
     ta.addEventListener('input', (e) => { ann.description = e.target.value; });
 
     item.appendChild(header);
     item.appendChild(ta);
-    descList.appendChild(item);
-  });
+    return item;
+  }
+
+  // 매뉴얼 마커 렌더
+  manualAnns.forEach(({ ann, i }) => descList.appendChild(renderDescItem(ann, i)));
+
+  // 구분선 (부가설명이 있을 때만)
+  if (suppAnns.length > 0 && manualAnns.length > 0) {
+    const sep = document.createElement('div');
+    sep.className = 'desc-separator';
+    sep.textContent = '부가설명';
+    descList.appendChild(sep);
+  }
+
+  // 부가설명 마커 렌더
+  suppAnns.forEach(({ ann, i }) => descList.appendChild(renderDescItem(ann, i)));
 }
 
 // ══════════════════════════════════════
@@ -1393,7 +1680,7 @@ function saveAndClose() {
   if (!viewport || !bgImage) { closeEditor(); return; }
   if (cropMode) exitCropMode();
   if (activeTextInput) commitInlineText();
-  selectedIndex = -1;
+  clearSelection();
 
   const invScale = 1 / imgScale;
 
@@ -1414,6 +1701,8 @@ function saveAndClose() {
     // 모든 타입에 색상/사이즈 보존
     if (ann.color) marker.color = ann.color;
     if (ann.badgeSize) marker.badgeSize = ann.badgeSize;
+    if (ann.markerType) marker.markerType = ann.markerType;
+    if (ann.displayLabel) marker.displayLabel = ann.displayLabel;
     if (ann.type === 'text') {
       marker.fontSize = ann.fontSize || 20;
     }
@@ -1439,3 +1728,94 @@ function saveAndClose() {
     }
   });
 }
+
+// ══════════════════════════════════════
+// 넘버링 크기 슬라이더
+// ══════════════════════════════════════
+(function initBadgeSizeSlider() {
+  const slider = document.getElementById('badgeSizeSlider');
+  const valueEl = document.getElementById('badgeSizeValue');
+  if (!slider || !valueEl) return;
+  let sliderUndoSaved = false;
+
+  slider.addEventListener('mousedown', () => { sliderUndoSaved = false; });
+  slider.addEventListener('input', () => {
+    if (!sliderUndoSaved) { saveUndoState(); sliderUndoSaved = true; }
+    const sz = parseInt(slider.value, 10);
+    valueEl.textContent = sz;
+    annotations.forEach(ann => { ann.badgeSize = sz; });
+    render();
+  });
+})();
+
+// ══════════════════════════════════════
+// 정렬 도구 (다중 선택 시)
+// ══════════════════════════════════════
+document.querySelectorAll('.align-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (selectedIndices.length < 2) return;
+    saveUndoState();
+    const align = btn.dataset.align;
+    const bounds = selectedIndices.map(i => {
+      const b = getSelectionBounds(annotations[i]);
+      return { index: i, ...b };
+    });
+
+    if (align === 'top') {
+      const minY = Math.min(...bounds.map(b => b.y));
+      bounds.forEach(b => {
+        const ann = annotations[b.index];
+        ann.y -= (b.y - minY);
+      });
+    } else if (align === 'bottom') {
+      const maxBottom = Math.max(...bounds.map(b => b.y + b.h));
+      bounds.forEach(b => {
+        const ann = annotations[b.index];
+        ann.y += maxBottom - (b.y + b.h);
+      });
+    } else if (align === 'left') {
+      const minX = Math.min(...bounds.map(b => b.x));
+      bounds.forEach(b => {
+        const ann = annotations[b.index];
+        ann.x -= (b.x - minX);
+      });
+    } else if (align === 'right') {
+      const maxRight = Math.max(...bounds.map(b => b.x + b.w));
+      bounds.forEach(b => {
+        const ann = annotations[b.index];
+        ann.x += maxRight - (b.x + b.w);
+      });
+    }
+    render();
+    renderDescList();
+  });
+});
+
+// ══════════════════════════════════════
+// 상단 매뉴얼/부가 토글
+// ══════════════════════════════════════
+let currentMarkerType = 'manual';
+
+document.querySelectorAll('.marker-type-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.marker-type-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentMarkerType = btn.dataset.markerType;
+
+    // 선택된 마커가 있으면 해당 마커의 타입 변경
+    if (hasSelection()) {
+      saveUndoState();
+      selectedIndices.forEach(i => {
+        const ann = annotations[i];
+        ann.markerType = currentMarkerType;
+        ann.color = currentMarkerType === 'supplementary' ? '#007aff' : '#e63232';
+      });
+      renumber();
+      render();
+      renderDescList();
+    }
+  });
+});
+
+// 초기 로드 후 renumber 호출
+setTimeout(() => { renumber(); render(); renderDescList(); }, 500);
